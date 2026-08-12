@@ -3893,6 +3893,16 @@ class TestPartitionNeedsResize(CiTestCase):
                                           self.table, self.sfdisk_part_info))
 
 
+class TestResizeBtrfs(CiTestCase):
+
+    @patch('curtin.commands.block_meta_v2.util.subp')
+    def test_resize_multi_device_raises(self, m_subp):
+        # A multi-device btrfs must be refused, not resized as devid 1.
+        m_subp.return_value = ('num_devices\t\t2\n', '')
+        with self.assertRaises(RuntimeError):
+            block_meta_v2.resize_btrfs('/dev/sda1', 5 << 30)
+
+
 class TestPartitionVerifyFdasd(CiTestCase):
 
     def setUp(self):

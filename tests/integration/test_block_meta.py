@@ -71,7 +71,7 @@ def _get_btrfs_size(dev, part_action):
     out = util.subp(cmd, capture=True)[0]
     # Sample output:
     # dev_item.total_bytes	419430400
-    volsize_matcher = re.compile(r'dev_item\.total_bytes\s+(\d+)\s*')
+    volsize_matcher = re.compile(r'dev_item\.total_bytes\s+(\d+)')
     for line in out.splitlines():
         m = volsize_matcher.fullmatch(line)
         if m:
