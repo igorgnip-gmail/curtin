@@ -13,6 +13,7 @@ import os
 import random
 import uuid
 
+from parameterized import parameterized
 from curtin.block import dasd
 from curtin.commands import block_meta, block_meta_v2
 from curtin import paths, util
@@ -3791,14 +3792,19 @@ class TestPartitionNeedsResize(CiTestCase):
         self.table = Mock()
         self.table.sectors2bytes = lambda x: x * 512
 
-    def test_partition_resize_happy_path(self):
+    @parameterized.expand(
+        (
+            ["ext4"], ["btrfs"], ["ntfs"],
+        ),
+    )
+    def test_partition_resize_happy_path(self, fstype):
         self.partition['preserve'] = True
         self.partition['resize'] = True
         self.format['preserve'] = True
-        self.format['fstype'] = 'ext4'
-        self.m_get_volume_fstype.return_value = 'ext4'
+        self.format['fstype'] = fstype
+        self.m_get_volume_fstype.return_value = fstype
         expected = {
-            'fstype': 'ext4',
+            'fstype': fstype,
             'size': 5 << 30,
             'direction': 'up',
         }
@@ -3885,6 +3891,16 @@ class TestPartitionNeedsResize(CiTestCase):
         self.assertIsNone(
             block_meta_v2._prepare_resize(self.storage_config, self.partition,
                                           self.table, self.sfdisk_part_info))
+
+
+class TestResizeBtrfs(CiTestCase):
+
+    @patch('curtin.commands.block_meta_v2.util.subp')
+    def test_resize_multi_device_raises(self, m_subp):
+        # A multi-device btrfs must be refused, not resized as devid 1.
+        m_subp.return_value = ('num_devices\t\t2\n', '')
+        with self.assertRaises(RuntimeError):
+            block_meta_v2.resize_btrfs('/dev/sda1', 5 << 30)
 
 
 class TestPartitionVerifyFdasd(CiTestCase):
