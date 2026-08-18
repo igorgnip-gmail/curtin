@@ -775,8 +775,6 @@ class ChrootableTarget(object):
             self.mounts = mounts
         else:
             self.mounts = ["/dev", "/proc", "/run", "/sys"]
-            if is_uefi_bootable():
-                self.mounts.append('/sys/firmware/efi/efivars')
         self.umounts = []
         self.disabled_daemons = False
         self.allow_daemons = allow_daemons
@@ -785,9 +783,20 @@ class ChrootableTarget(object):
         self.rc_tmp = None
 
     def __enter__(self):
+        # --rbind, not --bind: a plain --bind only captures the named
+        # mountpoint itself, not anything separately mounted underneath it
+        # (e.g. efivarfs at /sys/firmware/efi/efivars, devpts at /dev/pts) --
+        # those stay invisible inside the chroot. This broke efibootmgr
+        # (called from install_grub()/uefi_reorder_loaders() inside this
+        # exact chroot) with "EFI variables are not supported on this
+        # system", since /sys/firmware/efi/efivars existed as a directory
+        # but had none of efivarfs's actual content bind-mounted into it.
+        # do_umount(..., private=True) in __exit__ below already implies a
+        # recursive teardown (see its own docstring), so no corresponding
+        # change is needed there for the extra nested mounts --rbind adds.
         for p in self.mounts:
             tpath = paths.target_path(self.target, p)
-            if do_mount(p, tpath, opts='--bind'):
+            if do_mount(p, tpath, opts='--rbind'):
                 self.umounts.append(tpath)
 
         if self.target != "/" and not self.allow_daemons:
