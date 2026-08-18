@@ -301,9 +301,16 @@ def gen_uefi_install_commands(grub_name, grub_target, grub_cmd, update_nvram,
             grub_cmd = None
             if update_nvram:
                 efi_disk, efi_part_num = get_efi_disk_part(devices)
-                # Add entry to the EFI boot menu
+                # Add entry to the EFI boot menu. bootid itself must stay
+                # lowercase -- it's also the on-disk ESP directory name
+                # (/boot/efi/EFI/<bootid>/) matched above via
+                # find_efi_loader() and reused below for grub2-mkconfig
+                # and --bootloader-id. The NVRAM --label is purely a
+                # human-visible string with no such constraint, so
+                # capitalize just that one.
                 install_cmds.append(['efibootmgr', '--create',
-                                     '--write-signature', '--label', bootid,
+                                     '--write-signature', '--label',
+                                     bootid.capitalize(),
                                      '--disk', efi_disk,
                                      '--part', efi_part_num,
                                      '--loader',
