@@ -1,4 +1,5 @@
 # This file is part of curtin. See LICENSE file for copyright and license info.
+import asyncio
 import re
 from contextlib import contextmanager
 import errno
@@ -1334,14 +1335,27 @@ def get_supported_filesystems():
 def _discover_get_probert_data():
     try:
         LOG.debug('Importing probert prober')
-        from probert import prober
+        from probert.prober import Prober
     except Exception:
         LOG.error('Failed to import probert, discover disabled')
         return {}
 
-    probe = prober.Prober()
+    probe = Prober()
+
     LOG.debug('Probing system for storage devices')
-    probe.probe_storage()
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    if loop and loop.is_running():
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor() as executor:
+            executor.submit(lambda: asyncio.run(probe.probe_storage())).result()
+    else:
+        # Fallback to run it cleanly if executed in a synchronized context
+        asyncio.run(probe.probe_storage())
+
     return probe.get_results()
 
 
