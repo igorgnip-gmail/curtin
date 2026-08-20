@@ -558,8 +558,10 @@ def chdir(dirname):
 @contextmanager
 def mount(src, target):
     do_mount(src, target)
-    yield
-    do_umount(target)
+    try:
+        yield
+    finally:
+        do_umount(target)
 
 
 def do_mount(src, target, opts=None):
