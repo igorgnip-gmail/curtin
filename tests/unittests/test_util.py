@@ -700,6 +700,28 @@ class TestChrootableTargetMounts(CiTestCase):
         self.assertEqual(sorted(my_mounts), sorted(in_chroot.mounts))
 
 
+class TestMount(CiTestCase):
+    """Test util.mount context manager unmounts target."""
+
+    def setUp(self):
+        super(TestMount, self).setUp()
+        self.add_patch('curtin.util.do_mount', 'm_do_mount')
+        self.add_patch('curtin.util.do_umount', 'm_do_umount')
+
+    def test_mount_umounts_on_success(self):
+        with util.mount('src', 'target'):
+            pass
+        self.m_do_mount.assert_called_once_with('src', 'target')
+        self.m_do_umount.assert_called_once_with('target')
+
+    def test_mount_umounts_on_error(self):
+        with self.assertRaises(RuntimeError):
+            with util.mount('src', 'target'):
+                raise RuntimeError('unexpected error in mount ctx')
+        self.m_do_mount.assert_called_once_with('src', 'target')
+        self.m_do_umount.assert_called_once_with('target')
+
+
 class TestChrootableTargetIsChrootBehavior(CiTestCase):
     """Test ChrootableTargets handle ischroot behavior correctly
 
