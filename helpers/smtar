@@ -64,6 +64,7 @@ tar_has_compress_opt() {
             -j|--bzip2) return 0;;
             -J|--xz) return 0;;
             -Z|--compress|--uncompress) return 0;;
+            --zstd) return 0;;
             --) return 1;;
         esac
         shift
@@ -95,12 +96,14 @@ file_out=$(LANG=C file --mime-type "$TEMPF")
 # my.tar.gz: application/gzip
 # my.tar.xz: application/x-xz
 # my.tar.Z:  application/x-compress
+# my.tar.zst: application/zstd
 if [ $? -eq 0 ]; then
     case "$file_out" in
         */x-bzip2|*/bzip2) zopt="--bzip2";;
         */x-gzip|*/gzip) zopt="--gzip";;
         */x-xz|*/xz) zopt="--xz";;
         */x-compress|*/compress) zopt="--compress";;
+        */x-zstd|*/zstd) zopt="--zstd";;
         *) zopt="";;
     esac
 else
