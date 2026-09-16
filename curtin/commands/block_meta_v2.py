@@ -1,6 +1,8 @@
 # This file is part of curtin. See LICENSE file for copyright and license info.
 
 import os
+import re
+import tempfile
 from typing import (
     List,
     Optional,
@@ -100,6 +102,39 @@ def align_down(size, block_size):
     return size & ~(block_size - 1)
 
 
+def btrfs_device_count(path):
+    # num_devices is read from the superblock, so this works on an unmounted
+    # device without the other members present.
+    out, _ = util.subp(
+        ['btrfs', 'inspect-internal', 'dump-super', '--', path], capture=True)
+    for line in out.splitlines():
+        m = re.fullmatch(r'num_devices\s+(\d+)', line.strip())
+        if m:
+            return int(m.group(1))
+    raise RuntimeError('could not determine btrfs device count for %s' % path)
+
+
+def resize_btrfs(path, size):
+    # btrfs filesystem resize requires a mount point, not a raw device.
+    # See https://btrfs.readthedocs.io/en/latest/btrfs-filesystem.html
+    # (filesystem resize). Offline resize only supports increasing the
+    # size for now.
+    # Device id 1 is the default for single-device filesystems. Refuse
+    # multi-device filesystems rather than resizing the wrong device.
+    btrfs_device_id = 1
+    count = btrfs_device_count(path)
+    if count != btrfs_device_id:
+        raise RuntimeError(
+            'cannot resize multi-device btrfs filesystem on %s '
+            '(found %d devices)' % (path, count))
+    with tempfile.TemporaryDirectory(prefix='curtin-btrfs-') as mountpoint:
+        with util.mount(path, mountpoint):
+            util.subp(['btrfs', 'filesystem', 'resize',
+                       '{devid}:{size}'.format(
+                            devid=btrfs_device_id, size=size),
+                       mountpoint])
+
+
 def resize_ext(path, size):
     util.subp(['e2fsck', '-p', '-f', path])
     size_k = size // 1024
@@ -123,6 +158,7 @@ def perform_resize(kname, resize):
 
 
 resizers = {
+    'btrfs': resize_btrfs,
     'ext2': resize_ext,
     'ext3': resize_ext,
     'ext4': resize_ext,

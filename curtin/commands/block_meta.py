@@ -199,7 +199,7 @@ def get_bootpt_cfg(cfg, enabled=False, fstype=None, root_fstype=None):
     #   label:  filesystem label (default to 'boot')
     # parm enable can enable, but not disable
     # parm fstype overrides cfg['fstype']
-    def_boot = (platform.machine() in ('aarch64') and
+    def_boot = (platform.machine() == 'aarch64' and
                 not util.is_uefi_bootable())
     ret = {'enabled': def_boot, 'fstype': None, 'label': 'boot'}
     ret.update(cfg)
@@ -227,7 +227,7 @@ def get_partition_format_type(cfg, machine=None, uefi_bootable=None):
     if uefi_bootable:
         return 'uefi'
 
-    if machine in ['aarch64']:
+    if machine == 'aarch64':
         return 'gpt'
     elif machine.startswith('ppc64'):
         return 'prep'
@@ -921,7 +921,7 @@ def calc_partition_info(partition_kname, logical_block_size_bytes):
               partition_kname, p_size_sec, p_start_sec)
     if not all([p_size_sec, p_start_sec]):
         raise RuntimeError(
-            'Failed to determine partition %s info', partition_kname)
+            'Failed to determine partition %s info' % partition_kname)
 
     return (p_start_sec, p_size_sec)
 
@@ -1047,7 +1047,7 @@ def partition_handler(info, storage_config, context):
                        " and no extended partition '(type: partition, flag: "
                        "extended)' was found in the storage config.")
                 LOG.error(msg, info['id'])
-                raise RuntimeError(msg, info['id'])
+                raise RuntimeError(msg % info['id'])
             pnum = determine_partition_number(extended_part_id, storage_config)
         else:
             pnum = find_previous_partition(device, info['id'], storage_config)
