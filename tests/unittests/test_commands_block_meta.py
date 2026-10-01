@@ -2524,6 +2524,7 @@ class TestDmCryptKeyfileRemoval(DmCryptCommon):
         self.tempkey = self.tmp_path('test_dm_crypt_key')
         basepath = 'curtin.commands.block_meta.'
         self.add_patch(basepath + 'os.remove', 'm_os_remove')
+        self.add_patch(basepath + 'os.close', 'm_os_close')
 
     @patch('curtin.commands.block_meta.tempfile.mkstemp')
     def test_dm_crypt_removes_tmpfile_if_key(self, m_mkstemp):
