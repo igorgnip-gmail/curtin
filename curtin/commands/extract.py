@@ -55,11 +55,10 @@ def extract_root_tgz_url(url, target):
         return
 
     # Uses smtar to avoid specifying the compression type
-    util.subp(args=['sh', '-cf',
-                    ('wget "$1" --progress=dot:mega -O - |'
-                     'smtar -C "$2" ' + ' '.join(tar_xattr_opts()) +
-                     ' ' + '-Sxpf - --numeric-owner'),
-                    '--', url, target])
+    util.subp_pipeline([
+        ['wget', url, '--progress=dot:mega', '-O', '-'],
+        ['smtar', '-C', target] + tar_xattr_opts() +
+        ['-Sxpf', '-', '--numeric-owner']])
 
 
 def mount(device, mountpoint, options=None, type=None):

@@ -333,6 +333,46 @@ def subp(*args, **kwargs):
     return _subp(*args, **kwargs)
 
 
+def subp_pipeline(cmds, stdin=None):
+    """Run argv lists connected by pipes, without a shell.
+
+    A shell pipeline reports only the status of its last command, so a
+    failed download can still end in success. Here every member is checked
+    and ProcessExecutionError names the first failed one.
+
+    :param cmds: list of argv lists; the output of each feeds the next.
+    :param stdin: stdin of the first command; default is /dev/null.
+    """
+    LOG.debug("Running pipeline %s", cmds)
+    devnull = open(os.devnull)
+    procs = []
+    try:
+        prev_out = stdin if stdin is not None else devnull
+        for idx, cmd in enumerate(cmds):
+            last = idx == len(cmds) - 1
+            try:
+                proc = subprocess.Popen(
+                    cmd, stdin=prev_out, stdout=None if last else
+                    subprocess.PIPE)
+            except OSError as e:
+                raise ProcessExecutionError(cmd=cmd, reason=e)
+            procs.append(proc)
+            if prev_out not in (stdin, devnull):
+                # the child owns the read end now; EOF must reach it
+                prev_out.close()
+            prev_out = proc.stdout
+        statuses = [p.wait() for p in procs]
+    finally:
+        for proc in procs:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait()
+        devnull.close()
+    for cmd, rc in zip(cmds, statuses):
+        if rc != 0:
+            raise ProcessExecutionError(cmd=cmd, exit_code=rc)
+
+
 def wait_for_removal(path, retries=[1, 3, 5, 7]):
     if not path:
         raise ValueError('wait_for_removal: missing path parameter')

@@ -1,4 +1,5 @@
 import argparse
+import subprocess
 import os
 from unittest import mock
 
@@ -177,3 +178,33 @@ class TestInTargetMain(CiTestCase):
             in_target.in_target_main(args)
         self.assertEqual(0, cm.exception.code)
         self.m_chroot.assert_called_with('/t', allow_daemons=False)
+
+
+class TestSubpPipeline(CiTestCase):
+
+    allowed_subp = True
+
+    def test_failure_of_any_member_is_reported(self):
+        with self.assertRaises(util.ProcessExecutionError) as cm:
+            util.subp_pipeline([['sh', '-c', 'exit 3'], ['cat']])
+        self.assertEqual(3, cm.exception.exit_code)
+
+    def test_failure_of_last_member_is_reported(self):
+        with self.assertRaises(util.ProcessExecutionError):
+            util.subp_pipeline([['echo', 'x'], ['false']])
+
+    def test_data_flows_through(self):
+        out = self.tmp_path('out')
+        util.subp_pipeline(
+            [['echo', 'hello'], ['tr', 'a-z', 'A-Z'], ['tee', out]])
+        with open(out) as fp:
+            self.assertEqual('HELLO\n', fp.read())
+
+    def test_missing_program_is_a_process_error(self):
+        with self.assertRaises(util.ProcessExecutionError):
+            util.subp_pipeline([['echo', 'x'], ['/nonexistent/tool']])
+
+    def test_shell_pipeline_hides_the_failure(self):
+        # the behaviour this helper replaces
+        self.assertEqual(
+            0, subprocess.run(['sh', '-c', 'false | cat']).returncode)
