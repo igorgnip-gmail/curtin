@@ -681,10 +681,11 @@ class TestChrootableTargetMounts(CiTestCase):
     @mock.patch('curtin.util.is_uefi_bootable')
     @mock.patch.object(util.ChrootableTarget, "__enter__", new=lambda a: a)
     def test_chrootable_target_default_mounts_uefi(self, m_uefi):
+        # efivarfs is reached through the recursive bind of /sys, so UEFI
+        # hosts need no extra mount entry
         m_uefi.return_value = True
         in_chroot = util.ChrootableTarget("mytarget")
-        default_mounts = ['/dev', '/proc', '/run', '/sys',
-                          '/sys/firmware/efi/efivars']
+        default_mounts = ['/dev', '/proc', '/run', '/sys']
         self.assertEqual(sorted(default_mounts), sorted(in_chroot.mounts))
 
     @mock.patch.object(util.ChrootableTarget, "__enter__", new=lambda a: a)
