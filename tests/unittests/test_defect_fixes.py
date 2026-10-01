@@ -1,5 +1,6 @@
 import argparse
 import json
+import threading
 import subprocess
 import time
 import os
@@ -8,6 +9,7 @@ from unittest import mock
 from curtin import config, storage_config, util
 from curtin.block import mdadm
 from curtin.commands import block_meta, collect_logs, in_target
+from curtin.reporter import events, handlers
 from .helpers import CiTestCase
 
 
@@ -427,3 +429,61 @@ class TestSubpEnvironment(CiTestCase):
             util.subp(['ls'], env={'LC_ALL': 'de_DE.UTF-8'})
         self.assertEqual({'LC_ALL': 'de_DE.UTF-8'},
                          m_popen.call_args.kwargs['env'])
+
+
+class TestReporterHandlers(CiTestCase):
+
+    def _event(self, level):
+        return events.ReportingEvent(
+            events.START_EVENT_TYPE, 'n', 'd', level=level)
+
+    def _report(self, *handlers_, event=None):
+        registry = mock.Mock(registered_items=dict(
+            (str(i), h) for i, h in enumerate(handlers_)))
+        with mock.patch.object(events, 'instantiated_handler_registry',
+                               registry):
+            events.report_event(event or self._event('INFO'))
+
+    def test_failing_handler_does_not_stop_others_or_raise(self):
+        bad = mock.Mock(publish_event=mock.Mock(side_effect=OSError('x')))
+        good = mock.Mock()
+        self._report(bad, good)
+        good.publish_event.assert_called_once()
+
+    def test_handler_below_level_is_skipped(self):
+        webhook = handlers.WebHookHandler('http://h', level='WARN')
+        with mock.patch.object(webhook, '_post') as m_post:
+            self._report(webhook, event=self._event('INFO'))
+            webhook.flush()
+            m_post.assert_not_called()
+            self._report(webhook, event=self._event('ERROR'))
+            webhook.flush()
+            m_post.assert_called_once()
+
+    def test_webhook_does_not_block_the_caller(self):
+        release = threading.Event()
+        webhook = handlers.WebHookHandler('http://h')
+        with mock.patch.object(webhook, '_post',
+                               side_effect=lambda e: release.wait(5)):
+            started = time.monotonic()
+            webhook.publish_event(self._event('INFO'))
+            elapsed = time.monotonic() - started
+            release.set()
+            webhook.flush()
+        self.assertLess(elapsed, 1)
+
+    def test_journald_fallback_when_systemd_missing(self):
+        registry = handlers.DictRegistry()
+        with mock.patch.dict('sys.modules', {'systemd': None,
+                                             'systemd.journal': None}):
+            with mock.patch('builtins.print'):
+                self.assertFalse(handlers.register_journald(registry))
+        self.assertNotIn('journald', registry.registered_items)
+
+    def test_journald_registered_when_systemd_present(self):
+        registry = handlers.DictRegistry()
+        fake = mock.MagicMock()
+        with mock.patch.dict('sys.modules', {'systemd': fake,
+                                             'systemd.journal': fake}):
+            self.assertTrue(handlers.register_journald(registry))
+        self.assertIn('journald', registry.registered_items)

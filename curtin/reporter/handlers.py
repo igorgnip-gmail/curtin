@@ -1,6 +1,7 @@
 # This file is part of curtin. See LICENSE file for copyright and license info.
 
 import abc
+from concurrent.futures import ThreadPoolExecutor
 
 from .registry import DictRegistry
 from .. import url_helper
@@ -20,6 +21,22 @@ class ReportingHandler(object):
     @abc.abstractmethod
     def publish_event(self, event):
         """Publish an event to the ``INFO`` log level."""
+
+    def wants(self, event):
+        """Return False when the event is below the handler's level.
+
+        Only handlers whose level is a threshold override this; for
+        LogHandler the level is the one events are logged at.
+        """
+        return True
+
+
+def _event_passes_level(handler_level, event):
+    """True unless the event level is known and below handler_level."""
+    event_level = getattr(logging, str(event.level).upper(), None)
+    if not isinstance(event_level, int):
+        return True
+    return event_level >= handler_level
 
 
 class LogHandler(ReportingHandler):
@@ -70,8 +87,21 @@ class WebHookHandler(ReportingHandler):
             LOG.warning("invalid level '%s', using WARN", level)
             self.level = logging.WARN
         self.headers = {'Content-Type': 'application/json'}
+        # one worker keeps the order of events; the install does not wait
+        # for the endpoint. Python joins the worker at exit.
+        self._executor = ThreadPoolExecutor(max_workers=1)
+
+    def wants(self, event):
+        return _event_passes_level(self.level, event)
+
+    def flush(self):
+        """Wait until all queued events are posted."""
+        self._executor.submit(lambda: None).result()
 
     def publish_event(self, event):
+        self._executor.submit(self._post, event)
+
+    def _post(self, event):
         try:
             return self.oauth_helper.geturl(
                 url=self.endpoint, data=event.as_dict(),
@@ -97,12 +127,11 @@ class JournaldHandler(ReportingHandler):
         self.level = level
         self.identifier = identifier
 
+    def wants(self, event):
+        return _event_passes_level(self.level, event)
+
     def publish_event(self, event):
-        # Ubuntu older than precise will not have python-systemd installed.
-        try:
-            from systemd import journal
-        except ImportError:
-            raise
+        from systemd import journal
         level = str(getattr(journal, "LOG_" + event.level, journal.LOG_DEBUG))
         extra = {}
         if hasattr(event, 'result'):
@@ -122,10 +151,19 @@ available_handlers = DictRegistry()
 available_handlers.register_item('log', LogHandler)
 available_handlers.register_item('print', PrintHandler)
 available_handlers.register_item('webhook', WebHookHandler)
-# only add journald handler on systemd systems
-try:
-    available_handlers.register_item('journald', JournaldHandler)
-except ImportError:
-    print('journald report handler not supported; no systemd module')
+
+
+def register_journald(registry):
+    """Register the journald handler only where python-systemd exists."""
+    try:
+        import systemd.journal  # noqa: F401  probe: needed by the handler
+    except ImportError:
+        print('journald report handler not supported; no systemd module')
+        return False
+    registry.register_item('journald', JournaldHandler)
+    return True
+
+
+register_journald(available_handlers)
 
 # vi: ts=4 expandtab syntax=python

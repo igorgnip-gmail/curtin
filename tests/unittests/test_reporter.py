@@ -115,6 +115,7 @@ class TestReporter(CiTestCase):
         webhook_handler = handlers.WebHookHandler('127.0.0.1:8000',
                                                   level='INFO')
         webhook_handler.publish_event(event)
+        webhook_handler.flush()
         webhook_handler.oauth_helper.geturl.assert_called_with(
             url='127.0.0.1:8000', data=event.as_dict(),
             headers=webhook_handler.headers, retries=None)
@@ -200,6 +201,7 @@ class TestReporter(CiTestCase):
         webhook_handler = handlers.WebHookHandler('127.0.0.1:8000',
                                                   level='INFO')
         webhook_handler.publish_event(event)
+        webhook_handler.flush()
         webhook_handler.oauth_helper.geturl.assert_called_with(
             url='127.0.0.1:8000', data=event.as_dict(),
             headers=webhook_handler.headers, retries=None)
