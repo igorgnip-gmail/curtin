@@ -496,6 +496,7 @@ class TestBlockMetaSimple(CiTestCase):
                        'mock_config_load')
         # util
         self.add_patch('curtin.util.subp', 'mock_subp')
+        self.add_patch('curtin.util.subp_pipeline', 'mock_pipeline')
         self.add_patch('curtin.util.load_command_environment',
                        'mock_load_env')
 
@@ -511,13 +512,13 @@ class TestBlockMetaSimple(CiTestCase):
         block_meta.write_image_to_disk(source, devname)
 
         write = [
-            'sh', '-c',
-            'wget "$1" --progress=dot:mega -O - | xzcat | dd bs=4M of="$2"',
-            '--', source['uri'], devnode,
+            ['wget', source['uri'], '--progress=dot:mega', '-O', '-'],
+            ['xzcat'],
+            ['dd', 'bs=4M', 'of=' + devnode],
             ]
         self.mock_block_get_dev_name_entry.assert_called_with(devname)
-        self.mock_subp.assert_has_calls([call(args=write),
-                                         call(['partprobe', devnode]),
+        self.mock_pipeline.assert_called_once_with(write)
+        self.mock_subp.assert_has_calls([call(['partprobe', devnode]),
                                          call(['udevadm', 'trigger', devnode]),
                                          call(['udevadm', 'settle']),
                                          call(['udevadm', 'settle'])])
@@ -537,14 +538,13 @@ class TestBlockMetaSimple(CiTestCase):
         block_meta.write_image_to_disk(source, devname)
 
         write = [
-            'sh', '-c',
-            'wget "$1" --progress=dot:mega -O - | '
-            'tar -xOzf - | dd bs=4M of="$2"',
-            '--', source['uri'], devnode,
+            ['wget', source['uri'], '--progress=dot:mega', '-O', '-'],
+            ['tar', '-xOzf', '-'],
+            ['dd', 'bs=4M', 'of=' + devnode],
             ]
         self.mock_block_get_dev_name_entry.assert_called_with(devname)
-        self.mock_subp.assert_has_calls([call(args=write),
-                                         call(['partprobe', devnode]),
+        self.mock_pipeline.assert_called_once_with(write)
+        self.mock_subp.assert_has_calls([call(['partprobe', devnode]),
                                          call(['udevadm', 'trigger', devnode]),
                                          call(['udevadm', 'settle']),
                                          call(['udevadm', 'settle'])])
@@ -564,13 +564,12 @@ class TestBlockMetaSimple(CiTestCase):
         block_meta.write_image_to_disk(source, devname)
 
         write = [
-            'sh', '-c',
-            'cat "$1" | dd bs=4M of="$2"',
-            '--', '/pc.img', devnode,
+            ['cat', '/pc.img'],
+            ['dd', 'bs=4M', 'of=' + devnode],
             ]
         self.mock_block_get_dev_name_entry.assert_called_with(devname)
-        self.mock_subp.assert_has_calls([call(args=write),
-                                         call(['partprobe', devnode]),
+        self.mock_pipeline.assert_called_once_with(write)
+        self.mock_subp.assert_has_calls([call(['partprobe', devnode]),
                                          call(['udevadm', 'trigger', devnode]),
                                          call(['udevadm', 'settle']),
                                          call(['udevadm', 'settle'])])
@@ -1400,6 +1399,28 @@ class TestFstabData(CiTestCase):
             ["/dev/xvda1", "/mnt", "ext4", "defaults", "0", "1"],
             lines[1].split())
         self.assertEqual(0, m_get_uuid.call_count)
+
+    @parameterized.expand(
+        (
+            ("subvol=with\t\ttabs", "subvol=with\\011\\011tabs"),
+            ("subvol=with  spaces", "subvol=with\\040\\040spaces"),
+        ),
+    )
+    def test_fstab_line_for_data_option_with_spaces(
+            self, options, fstab_options):
+        with patch('curtin.block.get_volume_id') as m_get_uuid:
+            fdata = block_meta.FstabData(
+                spec="/dev/vda",
+                path="/mnt", fstype='btrfs', options=options)
+            m_get_uuid.return_value = None
+            lines = block_meta.fstab_line_for_data(fdata).splitlines()
+            self.assertEqual(
+                '# /mnt was on /dev/vda during curtin installation',
+                lines[0])
+            self.assertEqual(
+                ["/dev/vda", "/mnt", "btrfs", fstab_options, "0", "1"],
+                lines[1].split())
+            self.assertEqual(0, m_get_uuid.call_count)
 
     @patch('curtin.util.ensure_dir')
     @patch('curtin.util.subp')
@@ -2502,6 +2523,7 @@ class TestDmCryptKeyfileRemoval(DmCryptCommon):
         self.tempkey = self.tmp_path('test_dm_crypt_key')
         basepath = 'curtin.commands.block_meta.'
         self.add_patch(basepath + 'os.remove', 'm_os_remove')
+        self.add_patch(basepath + 'os.close', 'm_os_close')
 
     @patch('curtin.commands.block_meta.tempfile.mkstemp')
     def test_dm_crypt_removes_tmpfile_if_key(self, m_mkstemp):

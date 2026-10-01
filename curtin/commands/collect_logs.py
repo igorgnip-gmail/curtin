@@ -18,6 +18,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import sys
 import tempfile
 
@@ -30,6 +31,47 @@ from .install import CONFIG_BUILTIN, SAVE_INSTALL_CONFIG
 
 
 CURTIN_PACK_CONFIG_DIR = '/curtin/configs'
+REDACTED = '<REDACTED>'
+SECRET_KEYS = frozenset((
+    'password', 'passphrase', 'psk', 'secret',
+    'consumer_key', 'token_key', 'token_secret'))
+# user:password@ in URLs and in iscsi:user:password@host paths
+_CREDENTIALS_RE = re.compile(
+    r'((?:[A-Za-z][\w+.-]*://|iscsi:)[^:/@\s]+:)([^@\s]+)(@)')
+
+
+def redact_config(cfg):
+    """Return (copy of cfg with secrets blanked, list of secret values).
+
+    Blanked: values of SECRET_KEYS, the key of dm_crypt items and the
+    password in URLs and iscsi paths. The values come back longest first so
+    callers can redact them from other files.
+    """
+    secrets = []
+
+    def note(value):
+        if value not in secrets:
+            secrets.append(value)
+
+    def walk(node, secret_key=None):
+        if isinstance(node, dict):
+            is_crypt = node.get('type') == 'dm_crypt'
+            return {k: walk(v, k in SECRET_KEYS or (is_crypt and k == 'key'))
+                    for k, v in node.items()}
+        if isinstance(node, (list, tuple)):
+            return [walk(v, secret_key) for v in node]
+        if isinstance(node, str) and node:
+            if secret_key:
+                note(node)
+                return REDACTED
+
+            def blank(match):
+                note(match.group(2))
+                return match.group(1) + REDACTED + match.group(3)
+            return _CREDENTIALS_RE.sub(blank, node)
+        return node
+
+    return walk(cfg), sorted(secrets, key=len, reverse=True)
 
 
 def collect_logs_main(args):
@@ -68,7 +110,7 @@ def create_log_tarfile(tarfile, config):
 
     instcfg = config.get('install', {})
     logfile = instcfg.get('log_file')
-    alllogs = instcfg.get('post_files', [])
+    alllogs = list(instcfg.get('post_files', []))
     if logfile:
         alllogs.append(logfile)
     # Prune duplicates and files which do not exist
@@ -81,12 +123,7 @@ def create_log_tarfile(tarfile, config):
             stderr.write(
                 'Skipping logfile %s: file does not exist\n' % logfile)
 
-    maascfg = instcfg.get('maas', {})
-    redact_values = []
-    for key in ('consumer_key', 'token_key', 'token_secret'):
-        redact_value = maascfg.get(key)
-        if redact_value:
-            redact_values.append(redact_value)
+    config, redact_values = redact_config(config)
 
     date = datetime.utcnow().strftime('%Y-%m-%d-%H-%M')
     tmp_dir = tempfile.mkdtemp()
@@ -122,7 +159,10 @@ def _collect_system_info(target_dir, config):
         os.chmod(os.path.join(target_dir, os.path.basename(fpath)), 0o644)
     _out, _ = util.subp(['uname', '-a'], capture=True)
     util.write_file(os.path.join(target_dir, 'uname'), _out)
-    lshw_out, _ = util.subp(['sudo', 'lshw'], capture=True)
+    try:
+        lshw_out, _ = util.subp(['sudo', 'lshw'], capture=True)
+    except util.ProcessExecutionError as e:
+        lshw_out = 'lshw failed: %s\n' % e
     util.write_file(os.path.join(target_dir, 'lshw'), lshw_out)
     network_cmds = [
         ['ip', '--oneline', 'address', 'list'],
@@ -151,12 +191,13 @@ def _redact_sensitive_information(target_dir, redact_values):
     for root, _, files in os.walk(target_dir):
         for fname in files:
             fpath = os.path.join(root, fname)
-            with open(fpath) as stream:
+            mode = stat.S_IMODE(os.stat(fpath).st_mode)
+            with open(fpath, 'rb') as stream:
                 content = stream.read()
             for redact_value in redact_values:
-                content = re.sub(re.escape(redact_value), '<REDACTED>',
-                                 content)
-            util.write_file(fpath, content, mode=0o666)
+                content = content.replace(redact_value.encode(),
+                                          REDACTED.encode())
+            util.write_file(fpath, content, mode=mode, omode='wb')
 
 
 CMD_ARGUMENTS = (

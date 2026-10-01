@@ -11,6 +11,9 @@ import os.path
 import time
 
 from . import instantiated_handler_registry
+from .. import log as logging
+
+LOG = logging.getLogger(__name__)
 
 FINISH_EVENT_TYPE = 'finish'
 START_EVENT_TYPE = 'start'
@@ -98,8 +101,14 @@ def report_event(event):
         The type of the event; this should be a constant from the
         reporting module.
     """
-    for _, handler in instantiated_handler_registry.registered_items.items():
-        handler.publish_event(event)
+    handlers = instantiated_handler_registry.registered_items
+    for name, handler in handlers.items():
+        try:
+            if handler.wants(event):
+                handler.publish_event(event)
+        except Exception as e:
+            # a broken reporter must not fail the install
+            LOG.warning("reporting handler '%s' failed: %s", name, e)
 
 
 def report_finish_event(event_name, event_description,

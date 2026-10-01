@@ -11,6 +11,7 @@ import platform
 import re
 import shlex
 import shutil
+import signal
 import socket
 import subprocess
 import stat
@@ -73,18 +74,43 @@ class NotExclusiveError(OSError):
     EBUSY '''
 
 
+# the message of ProcessExecutionError keeps this many trailing characters
+# of each output stream; the full output goes to the DEBUG log
+MAX_ERROR_OUTPUT = 4096
+
+
+def _mask_secrets(value, secrets):
+    """Replace every secret in a str, bytes or list of them."""
+    if not secrets:
+        return value
+    if isinstance(value, (list, tuple)):
+        return [_mask_secrets(v, secrets) for v in value]
+    for secret in secrets:
+        if isinstance(value, bytes):
+            value = value.replace(secret.encode(), b'<REDACTED>')
+        elif isinstance(value, str):
+            value = value.replace(secret, '<REDACTED>')
+    return value
+
+
 def _subp(args, data=None, stdin=None, rcs=None, env=None, capture=False,
           combine_capture=False, shell=False, logstring=False,
           decode="replace", target=None, cwd=None, log_captured=False,
-          unshare_pid=None,
+          unshare_pid=None, timeout=None, secrets=None,
           *, systemd_force_offline: Optional[bool] = None):
     if rcs is None:
         rcs = [0]
     devnull_fp = None
+    secrets = sorted((s for s in secrets or [] if s), key=len, reverse=True)
 
     tpath = paths.target_path(target)
 
-    env = env.copy() if env is not None else os.environ.copy()
+    if env is None:
+        # untranslated output, so callers that parse it do not depend on
+        # the locale of the installer environment
+        env = dict(os.environ, LC_ALL='C')
+    else:
+        env = env.copy()
     # To determine if we are running in a chroot, systemd checks if
     # /proc/1/root (corresponding to the init process) and / are the same
     # inode. If they are different, systemd assumes we are in a chroot.
@@ -121,7 +147,8 @@ def _subp(args, data=None, stdin=None, rcs=None, env=None, capture=False,
     if not logstring:
         LOG.debug(
             "Running command %s with allowed return codes %s (capture=%s)",
-            args, rcs, 'combine' if combine_capture else capture)
+            _mask_secrets(args, secrets), rcs,
+            'combine' if combine_capture else capture)
     else:
         LOG.debug(("Running hidden command to protect sensitive "
                    "input/output logstring: %s"), logstring)
@@ -143,11 +170,23 @@ def _subp(args, data=None, stdin=None, rcs=None, env=None, capture=False,
         else:
             devnull_fp = open(os.devnull)
             stdin = devnull_fp
+        # own session, so a timeout can kill unshare and its children
         sp = subprocess.Popen(args, stdout=stdout,
                               stderr=stderr, stdin=stdin,
-                              env=env, shell=False, cwd=cwd)
+                              env=env, shell=False, cwd=cwd,
+                              start_new_session=timeout is not None)
         # communicate in python2 returns str, python3 returns bytes
-        (out, err) = sp.communicate(data)
+        try:
+            (out, err) = sp.communicate(data, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(sp.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            sp.communicate()
+            raise ProcessExecutionError(
+                cmd=_mask_secrets(args, secrets),
+                reason="timed out after %s seconds" % timeout)
 
         # Just ensure blank instead of none.
         if capture or combine_capture:
@@ -164,19 +203,25 @@ def _subp(args, data=None, stdin=None, rcs=None, env=None, capture=False,
             out = ldecode(out)
             err = ldecode(err)
     except OSError as e:
-        raise ProcessExecutionError(cmd=args, reason=e)
+        raise ProcessExecutionError(cmd=_mask_secrets(args, secrets),
+                                    reason=_mask_secrets(str(e), secrets))
     finally:
         if devnull_fp:
             devnull_fp.close()
 
     if capture and log_captured:
-        LOG.debug("Command returned stdout=%s, stderr=%s", out, err)
+        LOG.debug("Command returned stdout=%s, stderr=%s",
+                  _mask_secrets(out, secrets), _mask_secrets(err, secrets))
 
     rc = sp.returncode  # pylint: disable=E1101
     if rc not in rcs:
+        out = _mask_secrets(out, secrets)
+        err = _mask_secrets(err, secrets)
+        if (capture or combine_capture) and not logstring:
+            LOG.debug("Command failed with stdout=%s, stderr=%s", out, err)
         raise ProcessExecutionError(stdout=out, stderr=err,
                                     exit_code=rc,
-                                    cmd=args)
+                                    cmd=_mask_secrets(args, secrets))
     return (out, err)
 
 
@@ -295,6 +340,14 @@ def subp(*args, **kwargs):
         unshare the pid namespace.
         default value (None) is to unshare pid namespace if possible
         and target != /
+    :param timeout:
+        seconds to wait for the command. On expiry the command and its
+        process group are killed and ProcessExecutionError is raised.
+        default value (None) waits forever.
+    :param secrets:
+        list of strings hidden as <REDACTED> in the logged command, the
+        logged output and ProcessExecutionError. Use it instead of relying
+        on logstring alone.
     :param systemd_force_offline:
         if not None, will set the SYSTEMD_OFFLINE env variable to '1' or '0'
         if None, the variable will be set to '1' only if running in a chroot
@@ -326,11 +379,51 @@ def subp(*args, **kwargs):
             return _subp(*args, **kwargs)
         except ProcessExecutionError as e:
             LOG.debug("try %s: command %s failed, rc: %s", num,
-                      cmd, e.exit_code)
+                      _mask_secrets(cmd, kwargs.get('secrets')), e.exit_code)
             time.sleep(wait)
     # Final try without needing to wait or catch the error. If this
     # errors here then it will be raised to the caller.
     return _subp(*args, **kwargs)
+
+
+def subp_pipeline(cmds, stdin=None):
+    """Run argv lists connected by pipes, without a shell.
+
+    A shell pipeline reports only the status of its last command, so a
+    failed download can still end in success. Here every member is checked
+    and ProcessExecutionError names the first failed one.
+
+    :param cmds: list of argv lists; the output of each feeds the next.
+    :param stdin: stdin of the first command; default is /dev/null.
+    """
+    LOG.debug("Running pipeline %s", cmds)
+    devnull = open(os.devnull)
+    procs = []
+    try:
+        prev_out = stdin if stdin is not None else devnull
+        for idx, cmd in enumerate(cmds):
+            last = idx == len(cmds) - 1
+            try:
+                proc = subprocess.Popen(
+                    cmd, stdin=prev_out, stdout=None if last else
+                    subprocess.PIPE)
+            except OSError as e:
+                raise ProcessExecutionError(cmd=cmd, reason=e)
+            procs.append(proc)
+            if prev_out not in (stdin, devnull):
+                # the child owns the read end now; EOF must reach it
+                prev_out.close()
+            prev_out = proc.stdout
+        statuses = [p.wait() for p in procs]
+    finally:
+        for proc in procs:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait()
+        devnull.close()
+    for cmd, rc in zip(cmds, statuses):
+        if rc != 0:
+            raise ProcessExecutionError(cmd=cmd, exit_code=rc)
 
 
 def wait_for_removal(path, retries=[1, 3, 5, 7]):
@@ -453,6 +546,8 @@ class ProcessExecutionError(IOError):
     def _indent_text(self, text):
         if isinstance(text, bytes):
             text = text.decode()
+        if len(text) > MAX_ERROR_OUTPUT:
+            text = '[truncated] ...' + text[-MAX_ERROR_OUTPUT:]
         return text.replace('\n', '\n' + ' ' * self.stdout_indent_level)
 
 
@@ -806,7 +901,8 @@ class ChrootableTarget(object):
 
         rconf = paths.target_path(self.target, "/etc/resolv.conf")
         target_etc = os.path.dirname(rconf)
-        if self.target != "/" and os.path.isdir(target_etc):
+        if (self.sys_resolvconf and self.target != "/" and
+                os.path.isdir(target_etc)):
             # never muck with resolv.conf on /
             rconf = os.path.join(target_etc, "resolv.conf")
             rtd = None
@@ -843,21 +939,46 @@ class ChrootableTarget(object):
         return self
 
     def __exit__(self, etype, value, trace):
-        if self.disabled_daemons:
-            undisable_daemons_in_root(self.target)
+        first_error = None
+        try:
+            if self.disabled_daemons:
+                undisable_daemons_in_root(self.target)
 
-        # if /dev is to be unmounted, udevadm settle (LP: #1462139)
-        if paths.target_path(self.target, "/dev") in self.umounts:
-            log_call(subp, ['udevadm', 'settle'])
+            # if /dev is to be unmounted, udevadm settle (LP: #1462139)
+            if paths.target_path(self.target, "/dev") in self.umounts:
+                log_call(subp, ['udevadm', 'settle'])
+        except Exception as e:
+            first_error = e
+            LOG.warning("ChrootableTarget cleanup: %s", e)
 
+        # keep going after a failed umount: later mounts and resolv.conf
+        # must still be released, and the original exception must survive
         for p in reversed(self.umounts):
-            do_umount(p, private=True)
+            try:
+                do_umount(p, private=True)
+            except ProcessExecutionError as e:
+                first_error = first_error or e
+                LOG.warning("failed to unmount %s: %s", p, e)
 
+        try:
+            self._restore_resolv_conf()
+        except OSError as e:
+            first_error = first_error or e
+            LOG.warning("failed to restore resolv.conf: %s", e)
+
+        if first_error is not None and etype is None:
+            raise first_error
+
+    def _restore_resolv_conf(self):
         rconf = paths.target_path(self.target, "/etc/resolv.conf")
-        if self.sys_resolvconf and self.rconf_d:
-            if self.rc_tmp and os.path.lexists(self.rc_tmp):
-                os.rename(os.path.join(self.rconf_d, "resolv.conf"), rconf)
-            shutil.rmtree(self.rconf_d)
+        if not (self.sys_resolvconf and self.rconf_d):
+            return
+        if self.rc_tmp and os.path.lexists(self.rc_tmp):
+            os.rename(self.rc_tmp, rconf)
+        else:
+            # target had no resolv.conf: do not leave the host copy behind
+            os.unlink(rconf)
+        shutil.rmtree(self.rconf_d)
 
     def subp(self, *args, **kwargs):
         kwargs['target'] = self.target
@@ -1056,7 +1177,6 @@ def parse_efibootmgr(content: str) -> EFIBootState:
             continue
         args[attr] = val.strip()
 
-    print(args)
     args['order'] = args['order'].split(',')
 
     state = EFIBootState(**args)

@@ -903,7 +903,7 @@ class TestGenUefiInstallCommands(CiTestCase):
         expected_install = [
             ['efibootmgr', '-v'],
             ['efibootmgr', '--create', '--write-signature',
-             '--label', 'redhat', '--disk', disk, '--part', part,
+             '--label', 'Redhat', '--disk', disk, '--part', part,
              '--loader', expected_loader],
         ]
         expected_post = [
@@ -952,7 +952,7 @@ class TestGenUefiInstallCommands(CiTestCase):
         expected_install = [
             ['efibootmgr', '-v'],
             ['efibootmgr', '--create', '--write-signature',
-             '--label', 'redhat', '--disk', disk, '--part', part,
+             '--label', 'Redhat', '--disk', disk, '--part', part,
              '--loader', expected_loader],
         ]
         expected_post = [
@@ -1387,7 +1387,7 @@ class TestGenUefiInstallCommands(CiTestCase):
         expected_install = [
             ['efibootmgr', '-v'],
             ['efibootmgr', '--create', '--write-signature',
-             '--label', 'redhat', '--disk', disk, '--part', part,
+             '--label', 'Redhat', '--disk', disk, '--part', part,
              '--loader', expected_loader],
         ]
         expected_post = [
@@ -1436,7 +1436,7 @@ class TestGenUefiInstallCommands(CiTestCase):
         expected_install = [
             ['efibootmgr', '-v'],
             ['efibootmgr', '--create', '--write-signature',
-             '--label', 'redhat', '--disk', disk, '--part', part,
+             '--label', 'Redhat', '--disk', disk, '--part', part,
              '--loader', expected_loader],
         ]
         expected_post = [
@@ -1710,9 +1710,9 @@ class TestInstallGrub(CiTestCase):
 
         self.m_subp.assert_has_calls([
             mock.call(['/bin/true'], env=self.env, capture=True,
-                      target=self.target),
+                      log_captured=True, target=self.target),
             mock.call(['/bin/false'], env=self.env, capture=True,
-                      target=self.target),
+                      log_captured=True, target=self.target),
         ])
 
     def test_uefi_grub_install_ubuntu(self):
@@ -1753,9 +1753,9 @@ class TestInstallGrub(CiTestCase):
 
         self.m_subp.assert_has_calls([
             mock.call(['/bin/true'], env=self.env, capture=True,
-                      target=self.target),
+                      log_captured=True, target=self.target),
             mock.call(['/bin/false'], env=self.env, capture=True,
-                      target=self.target),
+                      log_captured=True, target=self.target),
         ])
 
     def test_uefi_grub_install_ubuntu_multiple_esp(self):
@@ -1796,9 +1796,9 @@ class TestInstallGrub(CiTestCase):
 
         self.m_subp.assert_has_calls([
             mock.call(['/bin/true'], env=self.env, capture=True,
-                      target=self.target),
+                      log_captured=True, target=self.target),
             mock.call(['/bin/false'], env=self.env, capture=True,
-                      target=self.target),
+                      log_captured=True, target=self.target),
         ])
 
 

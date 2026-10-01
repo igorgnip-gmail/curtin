@@ -1,5 +1,6 @@
 # This file is part of curtin. See LICENSE file for copyright and license info.
 import asyncio
+import inspect
 import re
 from contextlib import contextmanager
 import errno
@@ -1343,18 +1344,24 @@ def _discover_get_probert_data():
     probe = Prober()
 
     LOG.debug('Probing system for storage devices')
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = None
+    # probert releases differ: probe_storage is a coroutine in some and a
+    # plain method in others. Call it once and wait only if needed.
+    pending = probe.probe_storage()
+    if inspect.isawaitable(pending):
+        async def _wait():
+            return await pending
 
-    if loop and loop.is_running():
-        from concurrent.futures import ThreadPoolExecutor
-        with ThreadPoolExecutor() as executor:
-            executor.submit(lambda: asyncio.run(probe.probe_storage())).result()
-    else:
-        # Fallback to run it cleanly if executed in a synchronized context
-        asyncio.run(probe.probe_storage())
+        try:
+            running = asyncio.get_running_loop().is_running()
+        except RuntimeError:
+            running = False
+
+        if running:
+            from concurrent.futures import ThreadPoolExecutor
+            with ThreadPoolExecutor() as executor:
+                executor.submit(lambda: asyncio.run(_wait())).result()
+        else:
+            asyncio.run(_wait())
 
     return probe.get_results()
 
