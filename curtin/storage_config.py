@@ -257,12 +257,16 @@ def _validate_dep_type(source_id, dep_key, dep_id, sconfig):
     return result
 
 
-def find_item_dependencies(item_id, config, validate=True):
+def find_item_dependencies(item_id, config, validate=True, _seen=()):
     """ Walk a storage config collecting any dependent device ids."""
 
     if not config or not isinstance(config, OrderedDict):
         raise ValueError('Invalid config. Must be non-empty OrderedDict')
 
+    if item_id in _seen:
+        raise ValueError('dependency cycle at %s: %s' % (
+            item_id, ' -> '.join(_seen + (item_id,))))
+    _seen += (item_id,)
     item_cfg = config.get(item_id)
     if not item_cfg:
         return None
@@ -295,7 +299,7 @@ def find_item_dependencies(item_id, config, validate=True):
                     deps.append(sdep['id'])
 
                 # find lower level deps
-                lower_deps = find_item_dependencies(dep, config)
+                lower_deps = find_item_dependencies(dep, config, _seen=_seen)
                 if lower_deps:
                     deps.extend(lower_deps)
 
@@ -401,7 +405,36 @@ def extract_storage_ordered_dict(config):
     # id, and this can become very inefficient as storage_config grows, a dict
     # will be generated with the id of each component of the storage_config as
     # its index and the component of storage_config as its value
-    return OrderedDict((d["id"], d) for d in scfg)
+    storage = OrderedDict()
+    for d in scfg:
+        if d["id"] in storage:
+            raise ValueError("duplicate storage id '%s'" % d["id"])
+        storage[d["id"]] = d
+    return storage
+
+
+def validate_references(storage):
+    """Fail when an item refers to an unknown id or to one defined later.
+
+    Items are processed in order, so a later or missing reference fails
+    after earlier items already changed the disks. Cycles are a subset.
+    """
+    seen = set()
+    for item_id, item in storage.items():
+        for key in _stype_to_deps(item.get('type')):
+            value = item.get(key)
+            if value is None:
+                continue
+            for dep in (value if isinstance(value, list) else [value]):
+                if dep in seen:
+                    continue
+                if dep in storage:
+                    raise ValueError(
+                        "'%s' (%s) refers to '%s' which is defined later"
+                        % (item_id, key, dep))
+                raise ValueError("'%s' (%s) refers to unknown id '%s'"
+                                 % (item_id, key, dep))
+        seen.add(item_id)
 
 
 def decode_libblkid_string(encoded: str) -> str:

@@ -11,6 +11,8 @@ from curtin.reporter import events
 from curtin.storage_config import (
     extract_storage_ordered_dict,
     ptable_part_type_to_flag,
+    validate_config,
+    validate_references,
     )
 
 
@@ -92,6 +94,38 @@ CMD_ARGUMENTS = (
 
 
 @logged_time("BLOCK_META")
+def validate_storage(cfg):
+    """Reject a bad storage config before any disk is touched."""
+    if not cfg.get('storage'):
+        return
+    storage = extract_storage_ordered_dict(cfg)
+    try:
+        import jsonschema  # noqa: F401
+    except ImportError:
+        LOG.warning('jsonschema missing, storage config schema not checked')
+    else:
+        validate_config(cfg['storage'])
+    validate_references(storage)
+
+
+def order_mounts(storage):
+    """Return storage with mount items sorted by path depth, so /boot/efi
+    is mounted after /boot and /. Other items keep their position."""
+    def depth(item):
+        return len([p for p in (item.get('path') or '').split('/') if p])
+
+    keys = [k for k, v in storage.items() if v.get('type') == 'mount']
+    ordered = iter(sorted(keys, key=lambda k: depth(storage[k])))
+    result = OrderedDict()
+    for key in storage:
+        if key in keys:
+            key = next(ordered)
+        result[key] = storage[key]
+    if hasattr(storage, 'version'):
+        result.version = storage.version
+    return result
+
+
 def block_meta(args):
     # main entry point for the block-meta command.
     if args.testmode:
@@ -100,6 +134,9 @@ def block_meta(args):
         state = util.load_command_environment(strict=True)
     cfg = config.load_command_config(args, state)
     dd_images = util.get_dd_images(cfg.get('sources', {}))
+    if not dd_images or args.force_mode:
+        # dd-images use meta_simple, which ignores the storage config
+        validate_storage(cfg)
 
     # run clear holders on potential devices
     devices = args.devices
@@ -1203,6 +1240,34 @@ def partition_handler(info, storage_config, context):
         make_dname(info.get('id'), storage_config)
 
 
+# declared fstype -> type reported by blkid, when they differ
+_BLKID_FSTYPE = {'fat': 'vfat', 'fat12': 'vfat', 'fat16': 'vfat',
+                 'fat32': 'vfat'}
+
+
+def verify_preserved_fstype(volume_path, fstype):
+    """Fail when a preserved volume holds another filesystem than declared.
+
+    Nothing is checked when blkid reports no type or fstype is a
+    placeholder such as __FILESYSTEM__.
+    """
+    if not fstype or fstype.startswith('__') or fstype == 'zfsroot':
+        return
+    try:
+        found = block.blkid([volume_path], cache=False).get(
+            volume_path, {}).get('TYPE')
+    except util.ProcessExecutionError:
+        found = None
+    if found is None:
+        LOG.warning('cannot read filesystem type of %s', volume_path)
+        return
+    expected = _BLKID_FSTYPE.get(fstype, fstype)
+    if found != expected:
+        raise ValueError(
+            "preserved volume %s has filesystem '%s', config says '%s'" %
+            (volume_path, found, fstype))
+
+
 def format_handler(info, storage_config, context):
     volume = info.get('volume')
     if not volume:
@@ -1215,6 +1280,7 @@ def format_handler(info, storage_config, context):
     # Handle preserve flag
     if config.value_as_boolean(info.get('preserve')):
         # Volume marked to be preserved, not formatting
+        verify_preserved_fstype(volume_path, info.get('fstype'))
         return
 
     # Make filesystem using block library
@@ -1996,6 +2062,8 @@ def bcache_handler(info, storage_config, context):
                 create_bcache = False
         if not create_bcache:
             LOG.debug('bcache %s already present, skipping create', info['id'])
+            context.id_to_device[info['id']] = get_path_to_storage_volume(
+                info['id'], storage_config)
 
     cset_uuid = bcache_dev = None
     if create_bcache and cache_device:
@@ -2291,7 +2359,8 @@ def meta_custom(args):
             'partition': partition_handler_v2,
             })
 
-    storage_config_dict = zfsroot_update_storage_config(storage_config_dict)
+    storage_config_dict = order_mounts(
+        zfsroot_update_storage_config(storage_config_dict))
 
     # set up reportstack
     stack_prefix = state.get('report_stack_prefix', '')

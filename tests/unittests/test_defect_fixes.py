@@ -4,7 +4,7 @@ import time
 import os
 from unittest import mock
 
-from curtin import config, util
+from curtin import config, storage_config, util
 from curtin.block import mdadm
 from curtin.commands import block_meta, in_target
 from .helpers import CiTestCase
@@ -240,3 +240,100 @@ class TestValueAsBoolean(CiTestCase):
     def test_true_values(self):
         for val in (True, 1, 'yes', 'on', 'true', 'zero', 'superblock'):
             self.assertIs(True, config.value_as_boolean(val), val)
+
+
+class TestStorageConfigValidation(CiTestCase):
+
+    @staticmethod
+    def _cfg(*items):
+        return {'storage': {'version': 1, 'config': list(items)}}
+
+    def test_duplicate_id_is_rejected(self):
+        cfg = self._cfg({'id': 'a', 'type': 'disk'},
+                        {'id': 'a', 'type': 'disk'})
+        with self.assertRaisesRegex(ValueError, 'duplicate storage id'):
+            storage_config.extract_storage_ordered_dict(cfg)
+
+    def test_unknown_reference_is_rejected(self):
+        cfg = self._cfg({'id': 'a', 'type': 'disk'},
+                        {'id': 'a1', 'type': 'partition', 'device': 'nope'})
+        storage = storage_config.extract_storage_ordered_dict(cfg)
+        with self.assertRaisesRegex(ValueError, 'unknown id'):
+            storage_config.validate_references(storage)
+
+    def test_later_reference_is_rejected(self):
+        cfg = self._cfg({'id': 'a1', 'type': 'partition', 'device': 'a'},
+                        {'id': 'a', 'type': 'disk'})
+        storage = storage_config.extract_storage_ordered_dict(cfg)
+        with self.assertRaisesRegex(ValueError, 'defined later'):
+            storage_config.validate_references(storage)
+
+    def test_ordered_references_pass(self):
+        cfg = self._cfg({'id': 'a', 'type': 'disk'},
+                        {'id': 'a1', 'type': 'partition', 'device': 'a'})
+        storage_config.validate_references(
+            storage_config.extract_storage_ordered_dict(cfg))
+
+    def test_dependency_cycle_is_an_error(self):
+        cfg = self._cfg({'id': 'p1', 'type': 'partition', 'device': 'p2',
+                         'number': 1},
+                        {'id': 'p2', 'type': 'partition', 'device': 'p1',
+                         'number': 2})
+        storage = storage_config.extract_storage_ordered_dict(cfg)
+        with self.assertRaisesRegex(ValueError, 'cycle'):
+            storage_config.find_item_dependencies('p1', storage)
+
+    def test_bad_config_fails_before_any_device_is_cleared(self):
+        cfg = self._cfg({'id': 'a', 'type': 'disk', 'path': '/dev/a'},
+                        {'id': 'a', 'type': 'disk', 'path': '/dev/b'})
+        args = argparse.Namespace(testmode=True, devices=None,
+                                  force_mode=False)
+        with mock.patch.object(block_meta.config, 'load_command_config',
+                               return_value=cfg), \
+                mock.patch.object(block_meta, 'meta_clear') as m_clear:
+            self.assertRaises(ValueError, block_meta.block_meta, args)
+        m_clear.assert_not_called()
+
+    def test_mounts_are_sorted_by_path_depth(self):
+        cfg = self._cfg(
+            {'id': 'efi', 'type': 'mount', 'path': '/boot/efi'},
+            {'id': 'd', 'type': 'disk'},
+            {'id': 'boot', 'type': 'mount', 'path': '/boot'},
+            {'id': 'root', 'type': 'mount', 'path': '/'})
+        storage = storage_config.extract_storage_ordered_dict(cfg)
+        storage.version = 1
+        result = block_meta.order_mounts(storage)
+        self.assertEqual(['root', 'd', 'boot', 'efi'], list(result))
+        self.assertEqual(1, result.version)
+
+
+class TestPreservedStorage(CiTestCase):
+
+    def test_preserved_bcache_is_recorded_in_device_map(self):
+        info = {'id': 'bc', 'type': 'bcache', 'preserve': True,
+                'backing_device': 'b', 'cache_device': 'c'}
+        context = mock.Mock(id_to_device={})
+        with mock.patch.object(block_meta, 'get_path_to_storage_volume',
+                               return_value='/dev/bcache0'), \
+                mock.patch.object(block_meta, 'bcache_verify',
+                                  return_value=True), \
+                mock.patch.object(block_meta, 'make_dname'):
+            block_meta.bcache_handler(info, {'bc': info}, context)
+        self.assertEqual({'bc': '/dev/bcache0'}, context.id_to_device)
+
+    def _format(self, found, fstype):
+        info = {'id': 'f', 'type': 'format', 'volume': 'v',
+                'fstype': fstype, 'preserve': True}
+        with mock.patch.object(block_meta, 'get_path_to_storage_volume',
+                               return_value='/dev/sda1'), \
+                mock.patch.object(block_meta.block, 'blkid',
+                                  return_value={'/dev/sda1': found}):
+            block_meta.format_handler(info, {'v': {}, 'f': info}, None)
+
+    def test_preserved_format_mismatch_is_an_error(self):
+        with self.assertRaisesRegex(ValueError, "has filesystem 'ext4'"):
+            self._format({'TYPE': 'ext4'}, 'xfs')
+
+    def test_preserved_format_match_and_fat_alias_pass(self):
+        self._format({'TYPE': 'ext4'}, 'ext4')
+        self._format({'TYPE': 'vfat'}, 'fat32')
