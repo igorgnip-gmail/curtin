@@ -1,4 +1,5 @@
 import argparse
+import asyncio
 import json
 import threading
 import subprocess
@@ -6,7 +7,7 @@ import time
 import os
 from unittest import mock
 
-from curtin import config, storage_config, util
+from curtin import block, config, storage_config, util
 from curtin.block import mdadm
 from curtin.commands import block_meta, collect_logs, in_target
 from curtin.reporter import events, handlers
@@ -501,3 +502,49 @@ class TestCollectLogsPostFiles(CiTestCase):
             collect_logs.create_log_tarfile(
                 os.path.join(self.tmp_dir(), 'x.tar'), cfg)
         self.assertEqual(['/a'], cfg['install']['post_files'])
+
+
+class TestDiscoverProbertData(CiTestCase):
+
+    def _discover(self, prober_cls):
+        probert = mock.MagicMock()
+        probert.Prober = prober_cls
+        modules = {'probert': probert, 'probert.prober': probert}
+        with mock.patch.dict('sys.modules', modules):
+            return block._discover_get_probert_data()
+
+    @staticmethod
+    def _prober(is_async):
+        class Prober:
+            calls = 0
+
+            def get_results(self):
+                return {'storage': {}}
+
+        if is_async:
+            async def probe_storage(self):
+                Prober.calls += 1
+        else:
+            def probe_storage(self):
+                Prober.calls += 1
+        Prober.probe_storage = probe_storage
+        return Prober
+
+    def test_synchronous_probert(self):
+        prober = self._prober(is_async=False)
+        self.assertEqual({'storage': {}}, self._discover(prober))
+        self.assertEqual(1, prober.calls)
+
+    def test_asynchronous_probert(self):
+        prober = self._prober(is_async=True)
+        self.assertEqual({'storage': {}}, self._discover(prober))
+        self.assertEqual(1, prober.calls)
+
+    def test_asynchronous_probert_inside_a_running_loop(self):
+        prober = self._prober(is_async=True)
+
+        async def caller():
+            return self._discover(prober)
+
+        self.assertEqual({'storage': {}}, asyncio.run(caller()))
+        self.assertEqual(1, prober.calls)
