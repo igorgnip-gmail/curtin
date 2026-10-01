@@ -1,9 +1,10 @@
+import argparse
 import os
 from unittest import mock
 
 from curtin import util
 from curtin.block import mdadm
-from curtin.commands import block_meta
+from curtin.commands import block_meta, in_target
 from .helpers import CiTestCase
 
 
@@ -103,3 +104,76 @@ class TestBcachePathLookup(CiTestCase):
         self.assertEqual(
             '/dev/bcache0',
             block_meta.get_path_to_storage_volume('bc0', storage_config))
+
+
+class TestChrootableTargetCleanup(CiTestCase):
+
+    def setUp(self):
+        super().setUp()
+        self.target = self.tmp_dir()
+        self.etc = os.path.join(self.target, 'etc')
+        os.makedirs(self.etc)
+        self.resolv = os.path.join(self.etc, 'resolv.conf')
+        self.add_patch('curtin.util.do_mount', 'm_mount', return_value=True)
+        self.add_patch('curtin.util.do_umount', 'm_umount')
+        self.add_patch('curtin.util.log_call')
+        self.add_patch('curtin.util.disable_daemons_in_root',
+                       return_value=False)
+
+        def fake_copy(src, dst):
+            with open(dst, 'w') as fp:
+                fp.write('host\n')
+
+        self.add_patch('curtin.util.shutil.copy', side_effect=fake_copy)
+
+    def test_all_mounts_released_after_failed_umount(self):
+        with open(self.resolv, 'w') as fp:
+            fp.write('orig\n')
+        self.m_umount.side_effect = [
+            util.ProcessExecutionError(cmd=['umount'], exit_code=32),
+            None, None, None]
+        with self.assertRaises(util.ProcessExecutionError):
+            with util.ChrootableTarget(self.target):
+                pass
+        self.assertEqual(4, self.m_umount.call_count)
+        with open(self.resolv) as fp:
+            self.assertEqual('orig\n', fp.read())
+        self.assertEqual(['resolv.conf'], os.listdir(self.etc))
+
+    def test_original_error_survives_failed_umount(self):
+        self.m_umount.side_effect = util.ProcessExecutionError(
+            cmd=['umount'], exit_code=32)
+        with self.assertRaises(RuntimeError):
+            with util.ChrootableTarget(self.target):
+                raise RuntimeError('boom')
+        self.assertEqual(4, self.m_umount.call_count)
+
+    def test_host_resolv_conf_not_left_behind(self):
+        with util.ChrootableTarget(self.target):
+            self.assertTrue(os.path.exists(self.resolv))
+        self.assertEqual([], os.listdir(self.etc))
+
+    def test_sys_resolvconf_false_leaves_file_alone(self):
+        with open(self.resolv, 'w') as fp:
+            fp.write('orig\n')
+        with util.ChrootableTarget(self.target, sys_resolvconf=False):
+            with open(self.resolv) as fp:
+                self.assertEqual('orig\n', fp.read())
+        self.assertEqual(['resolv.conf'], os.listdir(self.etc))
+
+
+class TestInTargetMain(CiTestCase):
+
+    def test_target_from_environment(self):
+        args = argparse.Namespace(
+            target=None, allow_daemons=False, interactive=False,
+            capture=False, command_args=['true'])
+        self.add_patch(
+            'curtin.commands.in_target.util.load_command_environment',
+            return_value={'target': '/t'})
+        self.add_patch('curtin.commands.in_target.util.ChrootableTarget',
+                       'm_chroot')
+        with self.assertRaises(SystemExit) as cm:
+            in_target.in_target_main(args)
+        self.assertEqual(0, cm.exception.code)
+        self.m_chroot.assert_called_with('/t', allow_daemons=False)

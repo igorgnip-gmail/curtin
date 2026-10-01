@@ -806,7 +806,8 @@ class ChrootableTarget(object):
 
         rconf = paths.target_path(self.target, "/etc/resolv.conf")
         target_etc = os.path.dirname(rconf)
-        if self.target != "/" and os.path.isdir(target_etc):
+        if (self.sys_resolvconf and self.target != "/" and
+                os.path.isdir(target_etc)):
             # never muck with resolv.conf on /
             rconf = os.path.join(target_etc, "resolv.conf")
             rtd = None
@@ -843,21 +844,46 @@ class ChrootableTarget(object):
         return self
 
     def __exit__(self, etype, value, trace):
-        if self.disabled_daemons:
-            undisable_daemons_in_root(self.target)
+        first_error = None
+        try:
+            if self.disabled_daemons:
+                undisable_daemons_in_root(self.target)
 
-        # if /dev is to be unmounted, udevadm settle (LP: #1462139)
-        if paths.target_path(self.target, "/dev") in self.umounts:
-            log_call(subp, ['udevadm', 'settle'])
+            # if /dev is to be unmounted, udevadm settle (LP: #1462139)
+            if paths.target_path(self.target, "/dev") in self.umounts:
+                log_call(subp, ['udevadm', 'settle'])
+        except Exception as e:
+            first_error = e
+            LOG.warning("ChrootableTarget cleanup: %s", e)
 
+        # keep going after a failed umount: later mounts and resolv.conf
+        # must still be released, and the original exception must survive
         for p in reversed(self.umounts):
-            do_umount(p, private=True)
+            try:
+                do_umount(p, private=True)
+            except ProcessExecutionError as e:
+                first_error = first_error or e
+                LOG.warning("failed to unmount %s: %s", p, e)
 
+        try:
+            self._restore_resolv_conf()
+        except OSError as e:
+            first_error = first_error or e
+            LOG.warning("failed to restore resolv.conf: %s", e)
+
+        if first_error is not None and etype is None:
+            raise first_error
+
+    def _restore_resolv_conf(self):
         rconf = paths.target_path(self.target, "/etc/resolv.conf")
-        if self.sys_resolvconf and self.rconf_d:
-            if self.rc_tmp and os.path.lexists(self.rc_tmp):
-                os.rename(os.path.join(self.rconf_d, "resolv.conf"), rconf)
-            shutil.rmtree(self.rconf_d)
+        if not (self.sys_resolvconf and self.rconf_d):
+            return
+        if self.rc_tmp and os.path.lexists(self.rc_tmp):
+            os.rename(self.rc_tmp, rconf)
+        else:
+            # target had no resolv.conf: do not leave the host copy behind
+            os.unlink(rconf)
+        shutil.rmtree(self.rconf_d)
 
     def subp(self, *args, **kwargs):
         kwargs['target'] = self.target
