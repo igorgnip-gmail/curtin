@@ -1,9 +1,10 @@
 import argparse
 import subprocess
+import time
 import os
 from unittest import mock
 
-from curtin import util
+from curtin import config, util
 from curtin.block import mdadm
 from curtin.commands import block_meta, in_target
 from .helpers import CiTestCase
@@ -208,3 +209,34 @@ class TestSubpPipeline(CiTestCase):
         # the behaviour this helper replaces
         self.assertEqual(
             0, subprocess.run(['sh', '-c', 'false | cat']).returncode)
+
+
+class TestSubpTimeout(CiTestCase):
+
+    allowed_subp = True
+
+    def test_timeout_kills_the_command(self):
+        start = time.time()
+        with self.assertRaises(util.ProcessExecutionError) as cm:
+            util.subp(['sleep', '30'], timeout=0.3)
+        self.assertLess(time.time() - start, 10)
+        self.assertIn('timed out', str(cm.exception))
+
+    def test_no_timeout_by_default(self):
+        self.assertEqual(('', ''), util.subp(['true'], capture=True))
+
+
+class TestValueAsBoolean(CiTestCase):
+
+    def test_false_strings(self):
+        for val in ('no', 'No', 'NO', 'off', 'Off', 'false', 'False', 'none',
+                    'None', '0', ''):
+            self.assertIs(False, config.value_as_boolean(val), val)
+
+    def test_false_values(self):
+        for val in (False, None, 0):
+            self.assertIs(False, config.value_as_boolean(val), val)
+
+    def test_true_values(self):
+        for val in (True, 1, 'yes', 'on', 'true', 'zero', 'superblock'):
+            self.assertIs(True, config.value_as_boolean(val), val)

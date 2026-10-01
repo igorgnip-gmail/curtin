@@ -11,6 +11,7 @@ import platform
 import re
 import shlex
 import shutil
+import signal
 import socket
 import subprocess
 import stat
@@ -76,7 +77,7 @@ class NotExclusiveError(OSError):
 def _subp(args, data=None, stdin=None, rcs=None, env=None, capture=False,
           combine_capture=False, shell=False, logstring=False,
           decode="replace", target=None, cwd=None, log_captured=False,
-          unshare_pid=None,
+          unshare_pid=None, timeout=None,
           *, systemd_force_offline: Optional[bool] = None):
     if rcs is None:
         rcs = [0]
@@ -143,11 +144,22 @@ def _subp(args, data=None, stdin=None, rcs=None, env=None, capture=False,
         else:
             devnull_fp = open(os.devnull)
             stdin = devnull_fp
+        # own session, so a timeout can kill unshare and its children
         sp = subprocess.Popen(args, stdout=stdout,
                               stderr=stderr, stdin=stdin,
-                              env=env, shell=False, cwd=cwd)
+                              env=env, shell=False, cwd=cwd,
+                              start_new_session=timeout is not None)
         # communicate in python2 returns str, python3 returns bytes
-        (out, err) = sp.communicate(data)
+        try:
+            (out, err) = sp.communicate(data, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(sp.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            sp.communicate()
+            raise ProcessExecutionError(
+                cmd=args, reason="timed out after %s seconds" % timeout)
 
         # Just ensure blank instead of none.
         if capture or combine_capture:
@@ -295,6 +307,10 @@ def subp(*args, **kwargs):
         unshare the pid namespace.
         default value (None) is to unshare pid namespace if possible
         and target != /
+    :param timeout:
+        seconds to wait for the command. On expiry the command and its
+        process group are killed and ProcessExecutionError is raised.
+        default value (None) waits forever.
     :param systemd_force_offline:
         if not None, will set the SYSTEMD_OFFLINE env variable to '1' or '0'
         if None, the variable will be set to '1' only if running in a chroot
@@ -1122,7 +1138,6 @@ def parse_efibootmgr(content: str) -> EFIBootState:
             continue
         args[attr] = val.strip()
 
-    print(args)
     args['order'] = args['order'].split(',')
 
     state = EFIBootState(**args)

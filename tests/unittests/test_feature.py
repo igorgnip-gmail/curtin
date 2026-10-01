@@ -34,3 +34,10 @@ class TestExportsFeatures(CiTestCase):
         self.assertIn('FSTAB_DEFAULT_FSCK_ON_BLK', curtin.FEATURES)
 
 # vi: ts=4 expandtab syntax=python
+
+    def test_entries_are_single_names(self):
+        # a missing comma once joined two entries into one string
+        for name in curtin.FEATURES:
+            self.assertRegex(name, r'^[A-Z0-9_]+$')
+        self.assertIn('SUBCOMMAND_SYSTEM_INSTALL', curtin.FEATURES)
+        self.assertEqual(len(curtin.FEATURES), len(set(curtin.FEATURES)))
