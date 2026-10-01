@@ -778,7 +778,7 @@ def setup_grub(
                 LOG.warning(
                     "Storage Config grub device config takes precedence "
                     "over grub 'install_devices' value, ignoring: %s",
-                    bootcfg['install_devices'])
+                    bootcfg.install_devices)
             bootcfg.install_devices = storage_grub_devices
 
     LOG.debug("install_devices: %s", bootcfg.install_devices)

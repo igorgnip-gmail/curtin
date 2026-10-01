@@ -11,6 +11,7 @@ import platform
 import re
 import shlex
 import shutil
+import signal
 import socket
 import subprocess
 import stat
@@ -76,7 +77,7 @@ class NotExclusiveError(OSError):
 def _subp(args, data=None, stdin=None, rcs=None, env=None, capture=False,
           combine_capture=False, shell=False, logstring=False,
           decode="replace", target=None, cwd=None, log_captured=False,
-          unshare_pid=None,
+          unshare_pid=None, timeout=None,
           *, systemd_force_offline: Optional[bool] = None):
     if rcs is None:
         rcs = [0]
@@ -143,11 +144,22 @@ def _subp(args, data=None, stdin=None, rcs=None, env=None, capture=False,
         else:
             devnull_fp = open(os.devnull)
             stdin = devnull_fp
+        # own session, so a timeout can kill unshare and its children
         sp = subprocess.Popen(args, stdout=stdout,
                               stderr=stderr, stdin=stdin,
-                              env=env, shell=False, cwd=cwd)
+                              env=env, shell=False, cwd=cwd,
+                              start_new_session=timeout is not None)
         # communicate in python2 returns str, python3 returns bytes
-        (out, err) = sp.communicate(data)
+        try:
+            (out, err) = sp.communicate(data, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(sp.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            sp.communicate()
+            raise ProcessExecutionError(
+                cmd=args, reason="timed out after %s seconds" % timeout)
 
         # Just ensure blank instead of none.
         if capture or combine_capture:
@@ -295,6 +307,10 @@ def subp(*args, **kwargs):
         unshare the pid namespace.
         default value (None) is to unshare pid namespace if possible
         and target != /
+    :param timeout:
+        seconds to wait for the command. On expiry the command and its
+        process group are killed and ProcessExecutionError is raised.
+        default value (None) waits forever.
     :param systemd_force_offline:
         if not None, will set the SYSTEMD_OFFLINE env variable to '1' or '0'
         if None, the variable will be set to '1' only if running in a chroot
@@ -331,6 +347,46 @@ def subp(*args, **kwargs):
     # Final try without needing to wait or catch the error. If this
     # errors here then it will be raised to the caller.
     return _subp(*args, **kwargs)
+
+
+def subp_pipeline(cmds, stdin=None):
+    """Run argv lists connected by pipes, without a shell.
+
+    A shell pipeline reports only the status of its last command, so a
+    failed download can still end in success. Here every member is checked
+    and ProcessExecutionError names the first failed one.
+
+    :param cmds: list of argv lists; the output of each feeds the next.
+    :param stdin: stdin of the first command; default is /dev/null.
+    """
+    LOG.debug("Running pipeline %s", cmds)
+    devnull = open(os.devnull)
+    procs = []
+    try:
+        prev_out = stdin if stdin is not None else devnull
+        for idx, cmd in enumerate(cmds):
+            last = idx == len(cmds) - 1
+            try:
+                proc = subprocess.Popen(
+                    cmd, stdin=prev_out, stdout=None if last else
+                    subprocess.PIPE)
+            except OSError as e:
+                raise ProcessExecutionError(cmd=cmd, reason=e)
+            procs.append(proc)
+            if prev_out not in (stdin, devnull):
+                # the child owns the read end now; EOF must reach it
+                prev_out.close()
+            prev_out = proc.stdout
+        statuses = [p.wait() for p in procs]
+    finally:
+        for proc in procs:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait()
+        devnull.close()
+    for cmd, rc in zip(cmds, statuses):
+        if rc != 0:
+            raise ProcessExecutionError(cmd=cmd, exit_code=rc)
 
 
 def wait_for_removal(path, retries=[1, 3, 5, 7]):
@@ -806,7 +862,8 @@ class ChrootableTarget(object):
 
         rconf = paths.target_path(self.target, "/etc/resolv.conf")
         target_etc = os.path.dirname(rconf)
-        if self.target != "/" and os.path.isdir(target_etc):
+        if (self.sys_resolvconf and self.target != "/" and
+                os.path.isdir(target_etc)):
             # never muck with resolv.conf on /
             rconf = os.path.join(target_etc, "resolv.conf")
             rtd = None
@@ -843,21 +900,46 @@ class ChrootableTarget(object):
         return self
 
     def __exit__(self, etype, value, trace):
-        if self.disabled_daemons:
-            undisable_daemons_in_root(self.target)
+        first_error = None
+        try:
+            if self.disabled_daemons:
+                undisable_daemons_in_root(self.target)
 
-        # if /dev is to be unmounted, udevadm settle (LP: #1462139)
-        if paths.target_path(self.target, "/dev") in self.umounts:
-            log_call(subp, ['udevadm', 'settle'])
+            # if /dev is to be unmounted, udevadm settle (LP: #1462139)
+            if paths.target_path(self.target, "/dev") in self.umounts:
+                log_call(subp, ['udevadm', 'settle'])
+        except Exception as e:
+            first_error = e
+            LOG.warning("ChrootableTarget cleanup: %s", e)
 
+        # keep going after a failed umount: later mounts and resolv.conf
+        # must still be released, and the original exception must survive
         for p in reversed(self.umounts):
-            do_umount(p, private=True)
+            try:
+                do_umount(p, private=True)
+            except ProcessExecutionError as e:
+                first_error = first_error or e
+                LOG.warning("failed to unmount %s: %s", p, e)
 
+        try:
+            self._restore_resolv_conf()
+        except OSError as e:
+            first_error = first_error or e
+            LOG.warning("failed to restore resolv.conf: %s", e)
+
+        if first_error is not None and etype is None:
+            raise first_error
+
+    def _restore_resolv_conf(self):
         rconf = paths.target_path(self.target, "/etc/resolv.conf")
-        if self.sys_resolvconf and self.rconf_d:
-            if self.rc_tmp and os.path.lexists(self.rc_tmp):
-                os.rename(os.path.join(self.rconf_d, "resolv.conf"), rconf)
-            shutil.rmtree(self.rconf_d)
+        if not (self.sys_resolvconf and self.rconf_d):
+            return
+        if self.rc_tmp and os.path.lexists(self.rc_tmp):
+            os.rename(self.rc_tmp, rconf)
+        else:
+            # target had no resolv.conf: do not leave the host copy behind
+            os.unlink(rconf)
+        shutil.rmtree(self.rconf_d)
 
     def subp(self, *args, **kwargs):
         kwargs['target'] = self.target
@@ -1056,7 +1138,6 @@ def parse_efibootmgr(content: str) -> EFIBootState:
             continue
         args[attr] = val.strip()
 
-    print(args)
     args['order'] = args['order'].split(',')
 
     state = EFIBootState(**args)

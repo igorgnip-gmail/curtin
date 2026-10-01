@@ -534,7 +534,10 @@ def cmd_install(args):
         LOG.error(exp_msg)
         legacy_reporter.report_failure(exp_msg)
         if error_tarfile:
-            create_log_tarfile(error_tarfile, cfg)
+            try:
+                create_log_tarfile(error_tarfile, cfg)
+            except Exception:
+                LOG.exception("failed to create %s", error_tarfile)
         raise e
     finally:
         log_target_path = instcfg.get('save_install_log', SAVE_INSTALL_LOG)

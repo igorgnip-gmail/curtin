@@ -903,7 +903,7 @@ class TestGenUefiInstallCommands(CiTestCase):
         expected_install = [
             ['efibootmgr', '-v'],
             ['efibootmgr', '--create', '--write-signature',
-             '--label', 'redhat', '--disk', disk, '--part', part,
+             '--label', 'Redhat', '--disk', disk, '--part', part,
              '--loader', expected_loader],
         ]
         expected_post = [
@@ -952,7 +952,7 @@ class TestGenUefiInstallCommands(CiTestCase):
         expected_install = [
             ['efibootmgr', '-v'],
             ['efibootmgr', '--create', '--write-signature',
-             '--label', 'redhat', '--disk', disk, '--part', part,
+             '--label', 'Redhat', '--disk', disk, '--part', part,
              '--loader', expected_loader],
         ]
         expected_post = [
@@ -1387,7 +1387,7 @@ class TestGenUefiInstallCommands(CiTestCase):
         expected_install = [
             ['efibootmgr', '-v'],
             ['efibootmgr', '--create', '--write-signature',
-             '--label', 'redhat', '--disk', disk, '--part', part,
+             '--label', 'Redhat', '--disk', disk, '--part', part,
              '--loader', expected_loader],
         ]
         expected_post = [
@@ -1436,7 +1436,7 @@ class TestGenUefiInstallCommands(CiTestCase):
         expected_install = [
             ['efibootmgr', '-v'],
             ['efibootmgr', '--create', '--write-signature',
-             '--label', 'redhat', '--disk', disk, '--part', part,
+             '--label', 'Redhat', '--disk', disk, '--part', part,
              '--loader', expected_loader],
         ]
         expected_post = [

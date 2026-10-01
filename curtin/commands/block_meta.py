@@ -147,26 +147,25 @@ def write_image_to_disk(source, dev):
     """
     LOG.info('writing image to disk %s, %s', source, dev)
     extractor = {
-        'dd-tgz': '| tar -xOzf -',
-        'dd-txz': '| tar -xOJf -',
-        'dd-tbz': '| tar -xOjf -',
-        'dd-tar': '| smtar -xOf -',
-        'dd-bz2': '| bzcat',
-        'dd-gz': '| zcat',
-        'dd-xz': '| xzcat',
-        'dd-raw': ''
+        'dd-tgz': [['tar', '-xOzf', '-']],
+        'dd-txz': [['tar', '-xOJf', '-']],
+        'dd-tbz': [['tar', '-xOjf', '-']],
+        'dd-tar': [['smtar', '-xOf', '-']],
+        'dd-bz2': [['bzcat']],
+        'dd-gz': [['zcat']],
+        'dd-xz': [['xzcat']],
+        'dd-raw': []
     }
     uri = source['uri']
     if uri.startswith('file://'):
         uri = uri[len('file://'):]
-        fetch = 'cat "$1"'
+        fetch = ['cat', uri]
     else:
-        fetch = 'wget "$1" --progress=dot:mega -O - '
+        fetch = ['wget', uri, '--progress=dot:mega', '-O', '-']
     (devname, devnode) = block.get_dev_name_entry(dev)
-    util.subp(args=[
-        'sh', '-c',
-        fetch + extractor[source['type']] + ' | dd bs=4M of="$2"',
-        '--', uri, devnode])
+    util.subp_pipeline(
+        [fetch] + extractor[source['type']] +
+        [['dd', 'bs=4M', 'of=' + devnode]])
     util.subp(['partprobe', devnode])
 
     for i in range(3):
@@ -635,8 +634,9 @@ def get_path_to_storage_volume(volume, storage_config):
         backing_device_path = get_path_to_storage_volume(
             vol.get('backing_device'), storage_config)
         backing_device_kname = block.path_to_kname(backing_device_path)
-        sys_path = list(filter(lambda x: backing_device_kname in x,
-                               glob.glob("/sys/block/bcache*/slaves/*")))[0]
+        sys_path = list(filter(
+            lambda x: os.path.basename(x) == backing_device_kname,
+            glob.glob("/sys/block/bcache*/slaves/*")))[0]
         while "bcache" not in os.path.split(sys_path)[-1]:
             sys_path = os.path.split(sys_path)[0]
         bcache_kname = block.path_to_kname(sys_path)
@@ -1015,10 +1015,10 @@ def partition_handler(info, storage_config, context):
     device = info.get('device')
     size = info.get('size')
     flag = info.get('flag')
-    disk_ptable = storage_config.get(device).get('ptable')
-    partition_type = None
     if not device:
         raise ValueError("device must be set for partition to be created")
+    disk_ptable = storage_config.get(device).get('ptable')
+    partition_type = None
     if not size:
         raise ValueError("size must be specified for partition to be created")
 
@@ -1670,7 +1670,8 @@ def dm_crypt_handler(info, storage_config, context):
     elif 'key' in info:
         # TODO: this is insecure, find better way to do this
         key = info.get('key')
-        keyfile = tempfile.mkstemp()[1]
+        keyfd, keyfile = tempfile.mkstemp()
+        os.close(keyfd)
         remove_keyfile = True
         util.write_file(keyfile, key, mode=0o600)
     else:
@@ -1678,68 +1679,73 @@ def dm_crypt_handler(info, storage_config, context):
 
     recovery_keyfile = info.get('recovery_keyfile')
 
-    if preserve:
-        dm_crypt_verify(dmcrypt_dev, volume_path)
-        LOG.debug('dm_crypt %s already present, skipping create', dmcrypt_dev)
-        create_dmcrypt = False
+    try:
+        if preserve:
+            dm_crypt_verify(dmcrypt_dev, volume_path)
+            LOG.debug('dm_crypt %s already present, skipping create',
+                      dmcrypt_dev)
+            create_dmcrypt = False
 
-    if create_dmcrypt:
-        # if zkey is available, attempt to generate and use it; if it's not
-        # available or fails to setup properly, fallback to normal cryptsetup
-        # passing strict=False downgrades log messages to warnings
-        open_dmcrypt = True
-        zkey_used = None
-        if block.zkey_supported(strict=False):
-            volume_name = "%s:%s" % (volume_byid_path, dm_name)
-            LOG.debug('Attempting to set up zkey for %s', volume_name)
-            luks_type = 'luks2'
-            gen_cmd = ['zkey', 'generate', '--xts', '--volume-type', luks_type,
-                       '--sector-size', '4096', '--name', dm_name,
-                       '--description',
-                       "curtin generated zkey for %s" % volume_name,
-                       '--volumes', volume_name]
-            run_cmd = ['zkey', 'cryptsetup', '--run', '--volumes',
-                       volume_byid_path, '--batch-mode', '--key-file', keyfile]
-            try:
-                util.subp(gen_cmd, capture=True)
-                util.subp(run_cmd, capture=True)
-                zkey_used = os.path.join(os.path.split(state['fstab'])[0],
-                                         "zkey_used")
-                # mark in state that we used zkey
-                util.write_file(zkey_used, "1")
-            except util.ProcessExecutionError as e:
-                LOG.exception(e)
-                msg = 'Setup of zkey on %s failed, fallback to cryptsetup.'
-                LOG.error(msg % volume_path)
+        if create_dmcrypt:
+            # if zkey is available, attempt to generate and use it; if it's not
+            # available or fails to setup properly, fallback to normal
+            # cryptsetup
+            # passing strict=False downgrades log messages to warnings
+            open_dmcrypt = True
+            zkey_used = None
+            if block.zkey_supported(strict=False):
+                volume_name = "%s:%s" % (volume_byid_path, dm_name)
+                LOG.debug('Attempting to set up zkey for %s', volume_name)
+                luks_type = 'luks2'
+                gen_cmd = ['zkey', 'generate', '--xts', '--volume-type',
+                           luks_type, '--sector-size', '4096', '--name',
+                           dm_name,
+                           '--description',
+                           "curtin generated zkey for %s" % volume_name,
+                           '--volumes', volume_name]
+                run_cmd = ['zkey', 'cryptsetup', '--run', '--volumes',
+                           volume_byid_path, '--batch-mode', '--key-file',
+                           keyfile]
+                try:
+                    util.subp(gen_cmd, capture=True)
+                    util.subp(run_cmd, capture=True)
+                    zkey_used = os.path.join(os.path.split(state['fstab'])[0],
+                                             "zkey_used")
+                    # mark in state that we used zkey
+                    util.write_file(zkey_used, "1")
+                except util.ProcessExecutionError as e:
+                    LOG.exception(e)
+                    msg = 'Setup of zkey on %s failed, fallback to cryptsetup.'
+                    LOG.error(msg % volume_path)
 
-        if not zkey_used:
-            LOG.debug('Using cryptsetup on %s', volume_path)
-            luks_type = "luks"
-            cmd = ["cryptsetup"]
-            if cipher:
-                cmd.extend(["--cipher", cipher])
-            if keysize:
-                cmd.extend(["--key-size", keysize])
-            cmd.extend(["luksFormat", volume_path, keyfile])
+            if not zkey_used:
+                LOG.debug('Using cryptsetup on %s', volume_path)
+                luks_type = "luks"
+                cmd = ["cryptsetup"]
+                if cipher:
+                    cmd.extend(["--cipher", cipher])
+                if keysize:
+                    cmd.extend(["--key-size", keysize])
+                cmd.extend(["luksFormat", volume_path, keyfile])
+
+                util.subp(cmd)
+
+            if recovery_keyfile is not None:
+                LOG.debug("Adding recovery key to %s", volume_path)
+
+                cmd = [
+                    "cryptsetup", "luksAddKey",
+                    "--key-file", keyfile,
+                    volume_path, recovery_keyfile]
+
+                util.subp(cmd)
+
+        if open_dmcrypt:
+            cmd = ["cryptsetup", "open", "--type", luks_type, volume_path,
+                   dm_name, "--key-file", keyfile]
 
             util.subp(cmd)
-
-        if recovery_keyfile is not None:
-            LOG.debug("Adding recovery key to %s", volume_path)
-
-            cmd = [
-                "cryptsetup", "luksAddKey",
-                "--key-file", keyfile,
-                volume_path, recovery_keyfile]
-
-            util.subp(cmd)
-
-    if open_dmcrypt:
-        cmd = ["cryptsetup", "open", "--type", luks_type, volume_path, dm_name,
-               "--key-file", keyfile]
-
-        util.subp(cmd)
-
+    finally:
         if remove_keyfile:
             os.remove(keyfile)
 

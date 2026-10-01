@@ -16,8 +16,8 @@
 from datetime import datetime
 import json
 import os
-import re
 import shutil
+import stat
 import sys
 import tempfile
 
@@ -122,7 +122,10 @@ def _collect_system_info(target_dir, config):
         os.chmod(os.path.join(target_dir, os.path.basename(fpath)), 0o644)
     _out, _ = util.subp(['uname', '-a'], capture=True)
     util.write_file(os.path.join(target_dir, 'uname'), _out)
-    lshw_out, _ = util.subp(['sudo', 'lshw'], capture=True)
+    try:
+        lshw_out, _ = util.subp(['sudo', 'lshw'], capture=True)
+    except util.ProcessExecutionError as e:
+        lshw_out = 'lshw failed: %s\n' % e
     util.write_file(os.path.join(target_dir, 'lshw'), lshw_out)
     network_cmds = [
         ['ip', '--oneline', 'address', 'list'],
@@ -151,12 +154,12 @@ def _redact_sensitive_information(target_dir, redact_values):
     for root, _, files in os.walk(target_dir):
         for fname in files:
             fpath = os.path.join(root, fname)
-            with open(fpath) as stream:
+            mode = stat.S_IMODE(os.stat(fpath).st_mode)
+            with open(fpath, 'rb') as stream:
                 content = stream.read()
             for redact_value in redact_values:
-                content = re.sub(re.escape(redact_value), '<REDACTED>',
-                                 content)
-            util.write_file(fpath, content, mode=0o666)
+                content = content.replace(redact_value.encode(), b'<REDACTED>')
+            util.write_file(fpath, content, mode=mode, omode='wb')
 
 
 CMD_ARGUMENTS = (

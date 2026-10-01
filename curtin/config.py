@@ -125,9 +125,13 @@ def dump_config(config):
     return yaml.dump(config, default_flow_style=False, indent=2)
 
 
+_FALSE_STRINGS = ('', '0', 'false', 'none', 'no', 'off')
+
+
 def value_as_boolean(value):
-    false_values = (False, None, 0, '0', 'False', 'false', 'None', 'none', '')
-    return value not in false_values
+    if isinstance(value, str):
+        return value.lower() not in _FALSE_STRINGS
+    return value not in (False, None, 0)
 
 
 def _convert_install_devices(value):

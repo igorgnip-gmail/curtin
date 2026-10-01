@@ -4,8 +4,10 @@ from datetime import datetime
 import json
 from unittest import mock
 import os
+import stat
 from textwrap import dedent
 
+from curtin import util
 from curtin.commands import collect_logs
 from curtin.commands.install import CONFIG_BUILTIN
 from curtin.util import ensure_dir, write_file
@@ -176,6 +178,30 @@ class TestCollectLogs(CiTestCase):
         lshw = self.tmp_path('lshw', _dir=self.new_root)
         with open(lshw, 'r') as f:
             self.assertEqual(f.read(), 'lshw output')
+
+    def test_wb_collect_system_info_survives_lshw_failure(self):
+        """A failing lshw is recorded and does not abort log collection."""
+
+        def fake_subp(cmd, capture=False, combine_capture=False):
+            if cmd == ['sudo', 'lshw']:
+                raise util.ProcessExecutionError(cmd=cmd, reason='missing')
+            return ('', '')
+
+        self.mock_subp.side_effect = fake_subp
+        collect_logs._collect_system_info(self.new_root, config={})
+        with open(self.tmp_path('lshw', _dir=self.new_root)) as f:
+            self.assertIn('lshw failed', f.read())
+
+    def test_redact_keeps_mode_and_handles_binary(self):
+        """Redaction keeps file modes and accepts non UTF-8 content."""
+        path = self.tmp_path('log', _dir=self.new_root)
+        with open(path, 'wb') as f:
+            f.write(b'token=s3cr3t \xff\xfe')
+        os.chmod(path, 0o600)
+        collect_logs._redact_sensitive_information(self.new_root, ['s3cr3t'])
+        self.assertEqual(0o600, stat.S_IMODE(os.stat(path).st_mode))
+        with open(path, 'rb') as f:
+            self.assertEqual(b'token=<REDACTED> \xff\xfe', f.read())
 
     def test_wb_collect_system_info_writes_uname(self):
         """_collect_system_info saves uname details in target_dir."""

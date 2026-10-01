@@ -207,27 +207,29 @@ def mdadm_create(md_devname, raidlevel, devices, spares=None, container=None,
     udev.udevadm_settle()
     util.subp(["udevadm", "control", "--stop-exec-queue"])
     try:
-        util.subp(cmd, capture=True)
-    except util.ProcessExecutionError:
-        # frequent issues by modules being missing (LP: #1519470) - add debug
-        LOG.debug('mdadm_create failed - extra debug regarding md modules')
-        (out, _err) = util.subp(["lsmod"], capture=True)
-        if not _err:
-            LOG.debug('modules loaded: \n%s' % out)
-        raidmodpath = '/lib/modules/%s/kernel/drivers/md' % os.uname()[2]
-        (out, _err) = util.subp(["find", raidmodpath],
-                                rcs=[0, 1], capture=True)
-        if out:
-            LOG.debug('available md modules: \n%s' % out)
-        else:
-            LOG.debug('no available md modules found')
+        try:
+            util.subp(cmd, capture=True)
+        except util.ProcessExecutionError:
+            # frequent issues by modules being missing (LP: #1519470)
+            LOG.debug('mdadm_create failed - extra debug regarding md modules')
+            (out, _err) = util.subp(["lsmod"], capture=True)
+            if not _err:
+                LOG.debug('modules loaded: \n%s' % out)
+            raidmodpath = '/lib/modules/%s/kernel/drivers/md' % os.uname()[2]
+            (out, _err) = util.subp(["find", raidmodpath],
+                                    rcs=[0, 1], capture=True)
+            if out:
+                LOG.debug('available md modules: \n%s' % out)
+            else:
+                LOG.debug('no available md modules found')
 
-        for dev in devices + spares:
-            h = get_holders(dev)
-            LOG.debug('Device %s has holders: %s', dev, h)
-        raise
+            for dev in devices + (spares or []):
+                h = get_holders(dev)
+                LOG.debug('Device %s has holders: %s', dev, h)
+            raise
+    finally:
+        util.subp(["udevadm", "control", "--start-exec-queue"])
 
-    util.subp(["udevadm", "control", "--start-exec-queue"])
     udev.udevadm_settle(exists=md_devname)
 
 
