@@ -1710,9 +1710,9 @@ class TestInstallGrub(CiTestCase):
 
         self.m_subp.assert_has_calls([
             mock.call(['/bin/true'], env=self.env, capture=True,
-                      target=self.target),
+                      log_captured=True, target=self.target),
             mock.call(['/bin/false'], env=self.env, capture=True,
-                      target=self.target),
+                      log_captured=True, target=self.target),
         ])
 
     def test_uefi_grub_install_ubuntu(self):
@@ -1753,9 +1753,9 @@ class TestInstallGrub(CiTestCase):
 
         self.m_subp.assert_has_calls([
             mock.call(['/bin/true'], env=self.env, capture=True,
-                      target=self.target),
+                      log_captured=True, target=self.target),
             mock.call(['/bin/false'], env=self.env, capture=True,
-                      target=self.target),
+                      log_captured=True, target=self.target),
         ])
 
     def test_uefi_grub_install_ubuntu_multiple_esp(self):
@@ -1796,9 +1796,9 @@ class TestInstallGrub(CiTestCase):
 
         self.m_subp.assert_has_calls([
             mock.call(['/bin/true'], env=self.env, capture=True,
-                      target=self.target),
+                      log_captured=True, target=self.target),
             mock.call(['/bin/false'], env=self.env, capture=True,
-                      target=self.target),
+                      log_captured=True, target=self.target),
         ])
 
 

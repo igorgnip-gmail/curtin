@@ -408,3 +408,22 @@ class TestSubpSecrets(CiTestCase):
         self.assertLess(len(str(err)), util.MAX_ERROR_OUTPUT + 1000)
         self.assertIn('end-marker', str(err))
         self.assertGreater(len(logged), 20000)
+
+
+class TestSubpEnvironment(CiTestCase):
+
+    allowed_subp = True
+
+    @mock.patch('curtin.util.subprocess.Popen', side_effect=OSError)
+    def test_locale_is_forced_to_c(self, m_popen):
+        with mock.patch.dict(os.environ, {'LC_ALL': 'de_DE.UTF-8'}):
+            with self.assertRaises(util.ProcessExecutionError):
+                util.subp(['ls'])
+        self.assertEqual('C', m_popen.call_args.kwargs['env']['LC_ALL'])
+
+    @mock.patch('curtin.util.subprocess.Popen', side_effect=OSError)
+    def test_caller_env_is_kept(self, m_popen):
+        with self.assertRaises(util.ProcessExecutionError):
+            util.subp(['ls'], env={'LC_ALL': 'de_DE.UTF-8'})
+        self.assertEqual({'LC_ALL': 'de_DE.UTF-8'},
+                         m_popen.call_args.kwargs['env'])

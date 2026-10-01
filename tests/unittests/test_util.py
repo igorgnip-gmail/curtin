@@ -375,7 +375,7 @@ class TestSubp(CiTestCase):
         with self.assertRaises(util.ProcessExecutionError):
             util.subp(['ls', '-l'], target='/')
         m_popen.assert_called_once()
-        self.assertEqual(m_popen.call_args.kwargs['env'], {})
+        self.assertEqual(m_popen.call_args.kwargs['env'], {'LC_ALL': 'C'})
 
     @mock.patch('curtin.util.subprocess.Popen', side_effect=OSError)
     def test_systemd_offline_default__in_chroot(self, m_popen):
@@ -384,7 +384,7 @@ class TestSubp(CiTestCase):
                 util.subp(['ls', '-l'], target='/target')
         m_popen.assert_called_once()
         self.assertEqual(m_popen.call_args.kwargs['env'],
-                         {'SYSTEMD_OFFLINE': '1'})
+                         {'SYSTEMD_OFFLINE': '1', 'LC_ALL': 'C'})
 
     @mock.patch('curtin.util.subprocess.Popen', side_effect=OSError)
     def test_systemd_offline_default__no_override(self, m_popen):
@@ -393,7 +393,7 @@ class TestSubp(CiTestCase):
                 util.subp(['ls', '-l'], target='/target')
         m_popen.assert_called_once()
         self.assertEqual(m_popen.call_args.kwargs['env'],
-                         {'SYSTEMD_OFFLINE': '1'})
+                         {'SYSTEMD_OFFLINE': '1', 'LC_ALL': 'C'})
 
         m_popen.reset_mock()
         with mock.patch.dict(os.environ, {'SYSTEMD_OFFLINE': '0'}, clear=True):
@@ -401,7 +401,7 @@ class TestSubp(CiTestCase):
                 util.subp(['ls', '-l'], target='/target')
         m_popen.assert_called_once()
         self.assertEqual(m_popen.call_args.kwargs['env'],
-                         {'SYSTEMD_OFFLINE': '0'})
+                         {'SYSTEMD_OFFLINE': '0', 'LC_ALL': 'C'})
 
     @mock.patch('curtin.util.subprocess.Popen', side_effect=OSError)
     def test_systemd_offline_specified(self, m_popen):
@@ -410,7 +410,7 @@ class TestSubp(CiTestCase):
                 util.subp(['ls', '-l'], systemd_force_offline=True)
         m_popen.assert_called_once()
         self.assertEqual(m_popen.call_args.kwargs['env'],
-                         {'SYSTEMD_OFFLINE': '1'})
+                         {'SYSTEMD_OFFLINE': '1', 'LC_ALL': 'C'})
 
         m_popen.reset_mock()
         with mock.patch.dict(os.environ, {'SYSTEMD_OFFLINE': '1'}, clear=True):
@@ -418,7 +418,7 @@ class TestSubp(CiTestCase):
                 util.subp(['ls', '-l'], systemd_force_offline=False)
         m_popen.assert_called_once()
         self.assertEqual(m_popen.call_args.kwargs['env'],
-                         {'SYSTEMD_OFFLINE': '0'})
+                         {'SYSTEMD_OFFLINE': '0', 'LC_ALL': 'C'})
 
 
 class TestGetUnsharePidArgs(CiTestCase):

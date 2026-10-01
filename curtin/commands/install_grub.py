@@ -455,6 +455,7 @@ def install_grub(
     LOG.debug('Grub install cmds:\n%s', str(install_cmds + post_cmds))
     with util.ChrootableTarget(target) as in_chroot:
         for cmd in install_cmds + post_cmds:
-            in_chroot.subp(cmd, env=env, capture=True)
+            in_chroot.subp(cmd, env=env, capture=True,
+                           log_captured=True)
 
 # vi: ts=4 expandtab syntax=python

@@ -105,7 +105,12 @@ def _subp(args, data=None, stdin=None, rcs=None, env=None, capture=False,
 
     tpath = paths.target_path(target)
 
-    env = env.copy() if env is not None else os.environ.copy()
+    if env is None:
+        # untranslated output, so callers that parse it do not depend on
+        # the locale of the installer environment
+        env = dict(os.environ, LC_ALL='C')
+    else:
+        env = env.copy()
     # To determine if we are running in a chroot, systemd checks if
     # /proc/1/root (corresponding to the init process) and / are the same
     # inode. If they are different, systemd assumes we are in a chroot.
