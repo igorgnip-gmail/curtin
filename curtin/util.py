@@ -74,14 +74,34 @@ class NotExclusiveError(OSError):
     EBUSY '''
 
 
+# the message of ProcessExecutionError keeps this many trailing characters
+# of each output stream; the full output goes to the DEBUG log
+MAX_ERROR_OUTPUT = 4096
+
+
+def _mask_secrets(value, secrets):
+    """Replace every secret in a str, bytes or list of them."""
+    if not secrets:
+        return value
+    if isinstance(value, (list, tuple)):
+        return [_mask_secrets(v, secrets) for v in value]
+    for secret in secrets:
+        if isinstance(value, bytes):
+            value = value.replace(secret.encode(), b'<REDACTED>')
+        elif isinstance(value, str):
+            value = value.replace(secret, '<REDACTED>')
+    return value
+
+
 def _subp(args, data=None, stdin=None, rcs=None, env=None, capture=False,
           combine_capture=False, shell=False, logstring=False,
           decode="replace", target=None, cwd=None, log_captured=False,
-          unshare_pid=None, timeout=None,
+          unshare_pid=None, timeout=None, secrets=None,
           *, systemd_force_offline: Optional[bool] = None):
     if rcs is None:
         rcs = [0]
     devnull_fp = None
+    secrets = sorted((s for s in secrets or [] if s), key=len, reverse=True)
 
     tpath = paths.target_path(target)
 
@@ -122,7 +142,8 @@ def _subp(args, data=None, stdin=None, rcs=None, env=None, capture=False,
     if not logstring:
         LOG.debug(
             "Running command %s with allowed return codes %s (capture=%s)",
-            args, rcs, 'combine' if combine_capture else capture)
+            _mask_secrets(args, secrets), rcs,
+            'combine' if combine_capture else capture)
     else:
         LOG.debug(("Running hidden command to protect sensitive "
                    "input/output logstring: %s"), logstring)
@@ -159,7 +180,8 @@ def _subp(args, data=None, stdin=None, rcs=None, env=None, capture=False,
                 pass
             sp.communicate()
             raise ProcessExecutionError(
-                cmd=args, reason="timed out after %s seconds" % timeout)
+                cmd=_mask_secrets(args, secrets),
+                reason="timed out after %s seconds" % timeout)
 
         # Just ensure blank instead of none.
         if capture or combine_capture:
@@ -176,19 +198,25 @@ def _subp(args, data=None, stdin=None, rcs=None, env=None, capture=False,
             out = ldecode(out)
             err = ldecode(err)
     except OSError as e:
-        raise ProcessExecutionError(cmd=args, reason=e)
+        raise ProcessExecutionError(cmd=_mask_secrets(args, secrets),
+                                    reason=_mask_secrets(str(e), secrets))
     finally:
         if devnull_fp:
             devnull_fp.close()
 
     if capture and log_captured:
-        LOG.debug("Command returned stdout=%s, stderr=%s", out, err)
+        LOG.debug("Command returned stdout=%s, stderr=%s",
+                  _mask_secrets(out, secrets), _mask_secrets(err, secrets))
 
     rc = sp.returncode  # pylint: disable=E1101
     if rc not in rcs:
+        out = _mask_secrets(out, secrets)
+        err = _mask_secrets(err, secrets)
+        if (capture or combine_capture) and not logstring:
+            LOG.debug("Command failed with stdout=%s, stderr=%s", out, err)
         raise ProcessExecutionError(stdout=out, stderr=err,
                                     exit_code=rc,
-                                    cmd=args)
+                                    cmd=_mask_secrets(args, secrets))
     return (out, err)
 
 
@@ -311,6 +339,10 @@ def subp(*args, **kwargs):
         seconds to wait for the command. On expiry the command and its
         process group are killed and ProcessExecutionError is raised.
         default value (None) waits forever.
+    :param secrets:
+        list of strings hidden as <REDACTED> in the logged command, the
+        logged output and ProcessExecutionError. Use it instead of relying
+        on logstring alone.
     :param systemd_force_offline:
         if not None, will set the SYSTEMD_OFFLINE env variable to '1' or '0'
         if None, the variable will be set to '1' only if running in a chroot
@@ -342,7 +374,7 @@ def subp(*args, **kwargs):
             return _subp(*args, **kwargs)
         except ProcessExecutionError as e:
             LOG.debug("try %s: command %s failed, rc: %s", num,
-                      cmd, e.exit_code)
+                      _mask_secrets(cmd, kwargs.get('secrets')), e.exit_code)
             time.sleep(wait)
     # Final try without needing to wait or catch the error. If this
     # errors here then it will be raised to the caller.
@@ -509,6 +541,8 @@ class ProcessExecutionError(IOError):
     def _indent_text(self, text):
         if isinstance(text, bytes):
             text = text.decode()
+        if len(text) > MAX_ERROR_OUTPUT:
+            text = '[truncated] ...' + text[-MAX_ERROR_OUTPUT:]
         return text.replace('\n', '\n' + ' ' * self.stdout_indent_level)
 
 

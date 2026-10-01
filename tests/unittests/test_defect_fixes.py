@@ -377,3 +377,34 @@ class TestRedactConfig(CiTestCase):
             collect_logs.create_log_tarfile(
                 os.path.join(out_dir, 'x.tar'), cfg)
         self.assertNotIn('luks-pass', json.dumps(m.call_args[0][1]))
+
+
+class TestSubpSecrets(CiTestCase):
+
+    allowed_subp = True
+
+    def _fail(self, script, **kwargs):
+        with mock.patch.object(util.LOG, 'debug') as m_debug:
+            with self.assertRaises(util.ProcessExecutionError) as ctx:
+                util.subp(['sh', '-c', script], capture=True, **kwargs)
+        logged = ' '.join(str(c) for c in m_debug.call_args_list)
+        return ctx.exception, logged
+
+    def test_secret_is_hidden_in_error_and_logs(self):
+        err, logged = self._fail(
+            'echo out-sekret; echo err-sekret >&2; exit 3',
+            secrets=['sekret'])
+        self.assertNotIn('sekret', str(err))
+        self.assertNotIn('sekret', logged)
+        self.assertIn('<REDACTED>', str(err))
+
+    def test_without_secrets_output_is_kept(self):
+        err, _ = self._fail('echo out-sekret; exit 3')
+        self.assertIn('out-sekret', str(err))
+
+    def test_error_message_is_bounded_and_full_output_logged(self):
+        err, logged = self._fail('head -c 20000 /dev/zero | tr "\\0" x; '
+                                 'echo end-marker; exit 1')
+        self.assertLess(len(str(err)), util.MAX_ERROR_OUTPUT + 1000)
+        self.assertIn('end-marker', str(err))
+        self.assertGreater(len(logged), 20000)
