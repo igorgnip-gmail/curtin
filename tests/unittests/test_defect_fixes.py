@@ -1,4 +1,5 @@
 import argparse
+import json
 import subprocess
 import time
 import os
@@ -6,7 +7,7 @@ from unittest import mock
 
 from curtin import config, storage_config, util
 from curtin.block import mdadm
-from curtin.commands import block_meta, in_target
+from curtin.commands import block_meta, collect_logs, in_target
 from .helpers import CiTestCase
 
 
@@ -337,3 +338,42 @@ class TestPreservedStorage(CiTestCase):
     def test_preserved_format_match_and_fat_alias_pass(self):
         self._format({'TYPE': 'ext4'}, 'ext4')
         self._format({'TYPE': 'vfat'}, 'fat32')
+
+
+class TestRedactConfig(CiTestCase):
+
+    def test_secrets_are_blanked_and_returned(self):
+        cfg = {
+            'storage': {'config': [
+                {'id': 'c', 'type': 'dm_crypt', 'key': 'luks-pass'},
+                {'id': 'k', 'type': 'disk', 'key': 'not-a-secret'}]},
+            'install': {'maas': {'token_secret': 'tsecret'}},
+            'reporting': {'hook': {'password': 'hunter2',
+                                   'endpoint': 'https://u:s3cr3t@host/x'}},
+            'iscsi': ['iscsi:chap:iscsipw@10.0.0.1::3260::iqn.x'],
+        }
+        out, secrets = collect_logs.redact_config(cfg)
+        dumped = json.dumps(out)
+        for secret in ('luks-pass', 'tsecret', 'hunter2', 's3cr3t',
+                       'iscsipw'):
+            self.assertNotIn(secret, dumped)
+            self.assertIn(secret, secrets)
+        self.assertIn('not-a-secret', dumped)
+        self.assertIn('https://u:<REDACTED>@host/x', dumped)
+        self.assertEqual('luks-pass',
+                         cfg['storage']['config'][0]['key'])
+
+    def test_secrets_are_returned_longest_first(self):
+        _, secrets = collect_logs.redact_config(
+            {'a': {'password': 'abc'}, 'b': {'password': 'abcdef'}})
+        self.assertEqual(['abcdef', 'abc'], secrets)
+
+    def test_tarball_config_has_no_secrets(self):
+        cfg = {'storage': {'config': [
+            {'id': 'c', 'type': 'dm_crypt', 'key': 'luks-pass'}]}}
+        out_dir = self.tmp_dir()
+        with mock.patch.object(collect_logs.util, 'subp'), \
+                mock.patch.object(collect_logs, '_collect_system_info') as m:
+            collect_logs.create_log_tarfile(
+                os.path.join(out_dir, 'x.tar'), cfg)
+        self.assertNotIn('luks-pass', json.dumps(m.call_args[0][1]))

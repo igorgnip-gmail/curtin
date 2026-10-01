@@ -356,9 +356,13 @@ class TestCreateTar(CiTestCase):
                 m_dt.utcnow.return_value = self.utcnow
                 collect_logs.create_log_tarfile(tarfile, config=config)
         self.assertEqual(
-            [mock.call(self.tardir, ['ckey', 'tkey', 'tsecret'])],
+            [mock.call(self.tardir, ['tsecret', 'ckey', 'tkey'])],
             self.m_redact.call_args_list)
-        self.m_sys_info.assert_called_with(self.tardir, config)
+        self.m_sys_info.assert_called_with(self.tardir, {
+            'install': {
+                'maas': {'consumer_key': '<REDACTED>',
+                         'token_key': '<REDACTED>',
+                         'token_secret': '<REDACTED>'}}})
 
 
 class TestWBCollectLogs(CiTestCase):
