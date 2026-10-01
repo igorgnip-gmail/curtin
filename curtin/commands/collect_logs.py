@@ -110,7 +110,7 @@ def create_log_tarfile(tarfile, config):
 
     instcfg = config.get('install', {})
     logfile = instcfg.get('log_file')
-    alllogs = instcfg.get('post_files', [])
+    alllogs = list(instcfg.get('post_files', []))
     if logfile:
         alllogs.append(logfile)
     # Prune duplicates and files which do not exist

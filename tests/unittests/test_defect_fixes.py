@@ -487,3 +487,17 @@ class TestReporterHandlers(CiTestCase):
                                              'systemd.journal': fake}):
             self.assertTrue(handlers.register_journald(registry))
         self.assertIn('journald', registry.registered_items)
+
+
+class TestCollectLogsPostFiles(CiTestCase):
+
+    def test_post_files_is_not_mutated_by_log_collection(self):
+        cfg = {'install': {'post_files': ['/a'], 'log_file': '/b'}}
+        with mock.patch.object(collect_logs.util, 'subp'), \
+                mock.patch.object(collect_logs, '_collect_system_info'), \
+                mock.patch.object(collect_logs.os.path, 'exists',
+                                  return_value=False), \
+                mock.patch.object(collect_logs.sys, 'stderr'):
+            collect_logs.create_log_tarfile(
+                os.path.join(self.tmp_dir(), 'x.tar'), cfg)
+        self.assertEqual(['/a'], cfg['install']['post_files'])

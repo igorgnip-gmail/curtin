@@ -120,7 +120,7 @@ class TestCollectLogs(CiTestCase):
         expected_cfg['install'] = {
             'log_file': '/tmp/my.log',
             'log_file_append': False,
-            'post_files': ['/tmp/post.log', '/tmp/my.log'],
+            'post_files': ['/tmp/post.log'],
             'error_tarfile': '/var/log/curtin/curtin-error-logs.tar'}
         with open(curtin_config, 'r') as f:
             self.assertEqual(expected_cfg, json.loads(f.read()))
