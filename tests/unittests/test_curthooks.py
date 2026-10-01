@@ -400,7 +400,7 @@ class TestUpdateInitramfs(CiTestCase):
 
     def _mnt_call(self, point):
         target = os.path.join(self.target, point)
-        return call(['mount', '--bind', '/%s' % point, target])
+        return call(['mount', '--rbind', '/%s' % point, target])
 
     def _side_eff(self, cmd_out=None, cmd_err=None):
         if cmd_out is None:
