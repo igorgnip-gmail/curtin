@@ -1223,7 +1223,7 @@ def sanitize_source(source):
         # already sanitized?
         return source
     supported = ['tgz', 'dd-tgz', 'tbz', 'dd-tbz', 'txz', 'dd-txz', 'dd-tar',
-                 'dd-bz2', 'dd-gz', 'dd-xz', 'dd-raw', 'fsimage',
+                 'dd-bz2', 'dd-gz', 'dd-xz', 'dd-zst', 'dd-raw', 'fsimage',
                  'fsimage-layered']
     deftype = 'tgz'
     for i in supported:

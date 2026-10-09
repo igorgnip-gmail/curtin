@@ -1329,7 +1329,7 @@ class TestSanitizeSource(CiTestCase):
 
     # copied from curtin.util.sanitize_source
     supported = ['tgz', 'dd-tgz', 'tbz', 'dd-tbz', 'txz', 'dd-txz', 'dd-tar',
-                 'dd-bz2', 'dd-gz', 'dd-xz', 'dd-raw', 'fsimage',
+                 'dd-bz2', 'dd-gz', 'dd-xz', 'dd-zst', 'dd-raw', 'fsimage',
                  'fsimage-layered']
     source_url = 'http://curtin.io/root-fs.foo'
     squashfs_source_path = "/media/filesystem.squashfs"

@@ -191,6 +191,7 @@ def write_image_to_disk(source, dev):
         'dd-bz2': [['bzcat']],
         'dd-gz': [['zcat']],
         'dd-xz': [['xzcat']],
+        'dd-zst': [['zstdcat']],
         'dd-raw': []
     }
     uri = source['uri']

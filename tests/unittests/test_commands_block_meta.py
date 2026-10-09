@@ -526,6 +526,24 @@ class TestBlockMetaSimple(CiTestCase):
         self.mock_block_get_root_device.assert_called_with([devname],
                                                            paths=paths)
 
+    def test_write_image_to_disk_zstd(self):
+        source = {
+            'type': 'dd-zst',
+            'uri': 'http://myhost/curtin-unittest-dd.zst'
+        }
+        devname = "fakedisk1p1"
+        devnode = "/dev/" + devname
+        self.mock_block_get_dev_name_entry.return_value = (devname, devnode)
+
+        block_meta.write_image_to_disk(source, devname)
+
+        write = [
+            ['wget', source['uri'], '--progress=dot:mega', '-O', '-'],
+            ['zstdcat'],
+            ['dd', 'bs=4M', 'of=' + devnode],
+            ]
+        self.mock_pipeline.assert_called_once_with(write)
+
     def test_write_image_to_disk_ddtgz(self):
         source = {
             'type': 'dd-tgz',
