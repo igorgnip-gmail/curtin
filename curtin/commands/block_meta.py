@@ -203,7 +203,7 @@ def write_image_to_disk(source, dev):
     (devname, devnode) = block.get_dev_name_entry(dev)
     util.subp_pipeline(
         [fetch] + extractor[source['type']] +
-        [['dd', 'bs=4M', 'of=' + devnode]])
+        [['dd', 'bs=4M', 'iflag=fullblock', 'of=' + devnode]])
     util.subp(['partprobe', devnode])
 
     for i in range(3):

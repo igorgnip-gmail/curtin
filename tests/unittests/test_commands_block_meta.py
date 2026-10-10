@@ -514,7 +514,7 @@ class TestBlockMetaSimple(CiTestCase):
         write = [
             ['wget', source['uri'], '--progress=dot:mega', '-O', '-'],
             ['xzcat'],
-            ['dd', 'bs=4M', 'of=' + devnode],
+            ['dd', 'bs=4M', 'iflag=fullblock', 'of=' + devnode],
             ]
         self.mock_block_get_dev_name_entry.assert_called_with(devname)
         self.mock_pipeline.assert_called_once_with(write)
@@ -540,7 +540,7 @@ class TestBlockMetaSimple(CiTestCase):
         write = [
             ['wget', source['uri'], '--progress=dot:mega', '-O', '-'],
             ['zstdcat'],
-            ['dd', 'bs=4M', 'of=' + devnode],
+            ['dd', 'bs=4M', 'iflag=fullblock', 'of=' + devnode],
             ]
         self.mock_pipeline.assert_called_once_with(write)
 
@@ -558,7 +558,7 @@ class TestBlockMetaSimple(CiTestCase):
         write = [
             ['wget', source['uri'], '--progress=dot:mega', '-O', '-'],
             ['tar', '-xOzf', '-'],
-            ['dd', 'bs=4M', 'of=' + devnode],
+            ['dd', 'bs=4M', 'iflag=fullblock', 'of=' + devnode],
             ]
         self.mock_block_get_dev_name_entry.assert_called_with(devname)
         self.mock_pipeline.assert_called_once_with(write)
@@ -583,7 +583,7 @@ class TestBlockMetaSimple(CiTestCase):
 
         write = [
             ['cat', '/pc.img'],
-            ['dd', 'bs=4M', 'of=' + devnode],
+            ['dd', 'bs=4M', 'iflag=fullblock', 'of=' + devnode],
             ]
         self.mock_block_get_dev_name_entry.assert_called_with(devname)
         self.mock_pipeline.assert_called_once_with(write)
