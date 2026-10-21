@@ -512,7 +512,9 @@ class TestBlockMetaSimple(CiTestCase):
         block_meta.write_image_to_disk(source, devname)
 
         write = [
-            ['wget', source['uri'], '--progress=dot:mega', '-O', '-'],
+            ['wget', '--connect-timeout=5', '--tries=10',
+             '--retry-connrefused', '--waitretry=3',
+             source['uri'], '--progress=dot:mega', '-O', '-'],
             ['xzcat'],
             ['dd', 'bs=4M', 'iflag=fullblock', 'of=' + devnode],
             ]
@@ -538,7 +540,9 @@ class TestBlockMetaSimple(CiTestCase):
         block_meta.write_image_to_disk(source, devname)
 
         write = [
-            ['wget', source['uri'], '--progress=dot:mega', '-O', '-'],
+            ['wget', '--connect-timeout=5', '--tries=10',
+             '--retry-connrefused', '--waitretry=3',
+             source['uri'], '--progress=dot:mega', '-O', '-'],
             ['zstdcat'],
             ['dd', 'bs=4M', 'iflag=fullblock', 'of=' + devnode],
             ]
@@ -556,7 +560,9 @@ class TestBlockMetaSimple(CiTestCase):
         block_meta.write_image_to_disk(source, devname)
 
         write = [
-            ['wget', source['uri'], '--progress=dot:mega', '-O', '-'],
+            ['wget', '--connect-timeout=5', '--tries=10',
+             '--retry-connrefused', '--waitretry=3',
+             source['uri'], '--progress=dot:mega', '-O', '-'],
             ['tar', '-xOzf', '-'],
             ['dd', 'bs=4M', 'iflag=fullblock', 'of=' + devnode],
             ]

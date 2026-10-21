@@ -1,6 +1,7 @@
 # This file is part of curtin. See LICENSE file for copyright and license info.
 
 from email.utils import parsedate
+import http.client
 import json
 import os
 import socket
@@ -29,6 +30,48 @@ error = urllib_error
 
 DEFAULT_HEADERS = {'User-Agent': 'Curtin/' + version.version_string()}
 
+# A name with several addresses is tried address by address, so a dead
+# address must cost seconds, not the minutes of the system connect timeout.
+CONNECT_TIMEOUT = 5
+DOWNLOAD_RETRIES = 10
+# wget options with the same meaning; wget continues an interrupted
+# transfer with a Range request, also when writing to stdout.
+WGET_OPTS = ['--connect-timeout=%d' % CONNECT_TIMEOUT,
+             '--tries=%d' % DOWNLOAD_RETRIES,
+             '--retry-connrefused', '--waitretry=3']
+
+
+def wget_to_stdout(url):
+    return ['wget'] + WGET_OPTS + [url, '--progress=dot:mega', '-O', '-']
+
+
+class _HTTPConnection(http.client.HTTPConnection):
+    # The timeout covers the connect only; reads block as before.
+    def connect(self):
+        super().connect()
+        self.sock.settimeout(None)
+
+
+class _HTTPSConnection(http.client.HTTPSConnection):
+    def connect(self):
+        super().connect()
+        self.sock.settimeout(None)
+
+
+class _HTTPHandler(urllib_request.HTTPHandler):
+    def http_open(self, req):
+        return self.do_open(_HTTPConnection, req)
+
+
+class _HTTPSHandler(urllib_request.HTTPSHandler):
+    def https_open(self, req):
+        return self.do_open(_HTTPSConnection, req, context=self._context)
+
+
+def _urlopen(req):
+    opener = urllib_request.build_opener(_HTTPHandler(), _HTTPSHandler())
+    return opener.open(req, timeout=CONNECT_TIMEOUT)
+
 
 class _ReRaisedException(Exception):
     exc = None
@@ -46,7 +89,7 @@ class UrlReader(object):
         self.url = url
         try:
             req = urllib_request.Request(url=url, data=data, headers=headers)
-            self.fp = urllib_request.urlopen(req)
+            self.fp = _urlopen(req)
         except urllib_error.HTTPError as exc:
             raise UrlError(exc, code=exc.code, headers=exc.headers, url=url,
                            reason=exc.reason)
@@ -117,12 +160,14 @@ def download(url, path, reporthook=None, data=None, retries=0, retry_delay=3):
                       fsize / timedelta / 1024 / 1024)
             return path, rfp.info
         except UrlError as e:
-            # retry on internal server errors up to "retries #"
-            if (e.code < 500 or attempts >= retries):
+            # retry on connection errors (no code) and internal server
+            # errors up to "retries #"
+            if ((e.code is not None and e.code < 500) or
+                    attempts >= retries):
                 raise e
             LOG.debug("Current download failed with error: %s. Retrying in"
                       " %d seconds.",
-                      e.code, retry_delay)
+                      e.code if e.code is not None else e, retry_delay)
             attempts += 1
             time.sleep(retry_delay)
         finally:
@@ -207,7 +252,7 @@ def _geturl(url, headers=None, headers_cb=None, exception_cb=None, data=None):
 
     try:
         req = urllib_request.Request(url=url, data=data, headers=headers)
-        r = urllib_request.urlopen(req).read()
+        r = _urlopen(req).read()
         # python2, we want to return bytes, which is what python3 does
         if isinstance(r, str):
             return r.decode()

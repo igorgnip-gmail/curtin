@@ -6,6 +6,7 @@ from curtin.block import schemas
 from curtin.block import (bcache, clear_holders, dasd, iscsi, lvm, mdadm, mkfs,
                           multipath, zfs)
 from curtin import distro
+from curtin import url_helper
 from curtin.log import LOG, logged_time
 from curtin.reporter import events
 from curtin.storage_config import (
@@ -199,7 +200,7 @@ def write_image_to_disk(source, dev):
         uri = uri[len('file://'):]
         fetch = ['cat', uri]
     else:
-        fetch = ['wget', uri, '--progress=dot:mega', '-O', '-']
+        fetch = url_helper.wget_to_stdout(uri)
     (devname, devnode) = block.get_dev_name_entry(dev)
     util.subp_pipeline(
         [fetch] + extractor[source['type']] +

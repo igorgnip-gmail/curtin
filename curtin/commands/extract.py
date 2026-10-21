@@ -56,7 +56,7 @@ def extract_root_tgz_url(url, target):
 
     # Uses smtar to avoid specifying the compression type
     util.subp_pipeline([
-        ['wget', url, '--progress=dot:mega', '-O', '-'],
+        url_helper.wget_to_stdout(url),
         ['smtar', '-C', target] + tar_xattr_opts() +
         ['-Sxpf', '-', '--numeric-owner']])
 
@@ -105,7 +105,8 @@ class LayeredSourceHandler(AbstractSourceHandler):
         for path in self.image_stack:
             if url_helper.urlparse(path).scheme not in ["", "file"]:
                 new_path = os.path.join(self._tmpdir, os.path.basename(path))
-                url_helper.download(path, new_path, retries=3)
+                url_helper.download(
+                    path, new_path, retries=url_helper.DOWNLOAD_RETRIES)
             else:
                 new_path = _path_from_file_url(path)
             new_image_stack.append(new_path)

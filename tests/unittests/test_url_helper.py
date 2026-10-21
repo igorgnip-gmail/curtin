@@ -59,6 +59,18 @@ class TestDownload(CiTestCase):
         self.assertEqual(1, urlreader_mock.call_count,
                          "Didn't call UrlReader once (400 class error)")
 
+    @mock.patch('curtin.url_helper.UrlReader')
+    def test_download_retry_on_connection_error(self, urlreader_mock):
+        """Retry when the connection fails (no http code)."""
+        urlreader_mock.side_effect = url_helper.UrlError(
+            OSError("timed out"), code=None)
+
+        self.assertRaises(url_helper.UrlError, url_helper.download,
+                          "file://" + self.src_file, self.target_file,
+                          retries=3, retry_delay=0)
+        self.assertEqual(4, urlreader_mock.call_count,
+                         "Didn't call UrlReader 4 times (retries=3)")
+
     def test_download_file_url_retry_then_success(self):
         """Retry downloading a file with server error and then succeed."""
         url_reader = url_helper.UrlReader
@@ -76,6 +88,29 @@ class TestDownload(CiTestCase):
                          "then success)")
         self.assertTrue(filecmp.cmp(self.src_file, self.target_file),
                         "Downloaded file differed from source file.")
+
+
+class TestConnectTimeout(CiTestCase):
+    def test_wget_to_stdout(self):
+        self.assertEqual(
+            ['wget', '--connect-timeout=5', '--tries=10',
+             '--retry-connrefused', '--waitretry=3',
+             'http://host/img', '--progress=dot:mega', '-O', '-'],
+            url_helper.wget_to_stdout('http://host/img'))
+
+    @mock.patch('curtin.url_helper.urllib_request.build_opener')
+    def test_urlopen_sets_connect_timeout(self, m_build_opener):
+        req = object()
+        url_helper._urlopen(req)
+        m_build_opener.return_value.open.assert_called_once_with(
+            req, timeout=url_helper.CONNECT_TIMEOUT)
+
+    @mock.patch('curtin.url_helper.http.client.HTTPConnection.connect')
+    def test_connection_reads_do_not_time_out(self, m_connect):
+        conn = url_helper._HTTPConnection('host', timeout=5)
+        conn.sock = mock.Mock()
+        conn.connect()
+        conn.sock.settimeout.assert_called_once_with(None)
 
 
 class TestGetMaasVersion(CiTestCase):
