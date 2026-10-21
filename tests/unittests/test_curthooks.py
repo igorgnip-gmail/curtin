@@ -2914,6 +2914,37 @@ class TestDpkgReconfigure(CiTestCase):
             env=fk_env,
         )
 
+    def _boot(self, kernels, initrds):
+        boot = os.path.join(self.target, 'boot')
+        os.makedirs(boot, exist_ok=True)
+        for v in kernels:
+            open(os.path.join(boot, 'vmlinuz-' + v), 'w').close()
+        for v in initrds:
+            open(os.path.join(boot, 'initrd.img-' + v), 'w').close()
+
+    def test_creates_initrd_for_every_kernel(self):
+        # Debian kernel packages do not Provide linux-image, so the
+        # reconfigure loop runs for none of them; create all initrds
+        self.m_list_kernels.return_value = []
+        self._boot(['6.12.1-amd64', '6.12.2-amd64'], ['6.12.1-amd64'])
+        with patch('curtin.commands.curthooks.util.which',
+                   return_value='/usr/sbin/update-initramfs'):
+            curthooks.reconfigure_kernel(self.target)
+        for v in ('6.12.1-amd64', '6.12.2-amd64'):
+            self.m_subp.assert_any_call(
+                ['update-initramfs', '-c', '-k', v], target=self.target)
+
+    def test_reconfigured_kernel_keeps_its_initrd(self):
+        # a kernel the dpkg-reconfigure loop handled is not built twice
+        self.m_list_kernels.return_value = ['linux-image-6.12.1-amd64']
+        self._boot(['6.12.1-amd64'], ['6.12.1-amd64'])
+        with patch('curtin.commands.curthooks.util.which',
+                   return_value='/usr/sbin/update-initramfs'):
+            curthooks.reconfigure_kernel(self.target)
+        cmds = [c[0][0] for c in self.m_subp.call_args_list]
+        self.assertFalse([c for c in cmds if c[0] == 'update-initramfs'])
+
+
 
 @patch("curtin.commands.curthooks.setup_zipl")
 @patch("curtin.commands.curthooks.setup_kernel_img_conf")

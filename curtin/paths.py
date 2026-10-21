@@ -37,7 +37,8 @@ def target_path(target, path=None):
 
 def kernel_parse(fname):
     """Function to extract version to use for sorting"""
-    m = re.search(r".*/vmlinu.-([\d.-]+)-.*", fname)
+    # '+' ends the version too: Debian names kernels like 6.12.111+deb13-amd64
+    m = re.search(r".*/vmlinu.-([\d.-]+)[-+].*", fname)
     if not m:
         raise ValueError(f"Cannot extract version from '{fname}'")
     return version.parse(m.group(1))

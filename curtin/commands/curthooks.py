@@ -1758,6 +1758,19 @@ def reconfigure_kernel(target: pathlib.Path) -> None:
                 target=target,
                 env=flash_kernel_env(),
             )
+        # A kernel package that does not Provide linux-image (Debian) is not
+        # listed above, and its kernel was installed while update-initramfs
+        # was diverted, so it has no initrd. Create the initrd of every
+        # kernel then; creating one that was not needed is cheaper than
+        # skipping one that was.
+        kernels = distro.dpkg_query_list_kernels(target)
+        if util.which('update-initramfs', target=target):
+            for _, initrd, version in paths.get_kernel_list(target):
+                if not kernels or not os.path.exists(initrd):
+                    in_chroot.subp(
+                        ['update-initramfs', '-c', '-k', version],
+                        target=target,
+                    )
 
 
 def handle_cloudconfig(cfg, base_dir=None):
